@@ -1,0 +1,22 @@
+<?xml version="1.0"?>
+<package format="2">
+  <name>mini_pi_fsm</name>
+  <version>0.1.0</version>
+  <description>
+    FSM-based deployment framework for the HighTorque Mini-Pi (12 dof).
+    Structured after unitree_rl_mjlab/deploy; hardware access goes through the
+    HighTorque livelybot_serial SDK.
+  </description>
+  <maintainer email="buivuhai1105@gmail.com">huynq03</maintainer>
+  <license>Proprietary</license>
+
+  <buildtool_depend>catkin</buildtool_depend>
+
+  <depend>roscpp</depend>
+  <depend>roslib</depend>
+  <depend>sensor_msgs</depend>
+  <depend>geometry_msgs</depend>
+  <depend>livelybot_serial</depend>
+
+  <exec_depend>joy</exec_depend>
+</package>
