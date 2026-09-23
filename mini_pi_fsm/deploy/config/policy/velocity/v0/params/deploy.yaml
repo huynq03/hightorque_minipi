@@ -1,0 +1,121 @@
+# Mini-Pi production velocity policy.
+#
+# Model source (copied, never modified; md5 5a4e599e3933f5d2b461b80651376995):
+#   /home/huynq/Mini_Pi_RL_Baseline/logs/Pai_ppo/exported/policies/policy_onnx.onnx
+# Exported by humanoid/utils/helpers.py export_policy_to_onnx() from the
+# actor MLP: input 'input' [1, 705], output 'output' [1, 12]. Verified equal to
+# policy_torch.pt (max |diff| 3.6e-7 over random inputs).
+#
+# EVERY value below is taken from the TRAINING code (humanoid/envs/pai/
+# pai_config.py PaiCfg, pai_env.py PaiFreeEnv, base/legged_robot.py), which is
+# what the network was optimised against. Where the author's sim2sim.py or the
+# HighTorque vendor configs differ, the difference is noted and training wins.
+#
+# This package intentionally has no `simulation_only` flag: it is the real
+# trained policy, not the deterministic test fixture.
+
+# PaiCfg.sim.dt = 0.001 x PaiCfg.control.decimation = 20 -> 0.02 s (50 Hz).
+step_dt: 0.02
+
+# POLICY order == Isaac Gym DOF order of the training asset
+# (resources/robots/pi_12dof_release_v1/urdf/pi_12dof_release_v1_rl.urdf).
+# PROVEN by loading that asset with the vendored Isaac Gym and printing
+# gym.get_asset_dof_names(): left leg first, although the URDF text declares
+# the right leg first. Corroborated by PaiFreeEnv.compute_ref_state() (indices
+# 0..5 driven by sin_pos_l, 6..11 by sin_pos_r) and by sim2sim.py, which swaps
+# the two six-joint blocks of the right-first MJCF before inference.
+joint_names: [
+  "l_hip_pitch_joint", "l_hip_roll_joint", "l_thigh_joint",
+  "l_calf_joint", "l_ankle_pitch_joint", "l_ankle_roll_joint",
+  "r_hip_pitch_joint", "r_hip_roll_joint", "r_thigh_joint",
+  "r_calf_joint", "r_ankle_pitch_joint", "r_ankle_roll_joint"]
+
+# PaiCfg.init_state.default_joint_angles: all zero (URDF zero == stance pose).
+default_joint_pos: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+                    0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+
+# TRAINING gains, PaiCfg.control.stiffness / damping (matched by joint-name
+# suffix in LeggedRobot._init_buffers).
+# sim2sim.py uses the same kp but kd [1.8,0.8,0.8,1.8,1.8,0.6]; the policy was
+# optimised against the closed loop below, so training wins.
+stiffness: [40, 20, 20, 40, 40, 20,
+            40, 20, 20, 40, 40, 20]
+damping:   [0.6, 0.4, 0.4, 0.6, 0.6, 0.4,
+            0.6, 0.4, 0.4, 0.6, 0.6, 0.4]
+
+# PaiCfg.commands.ranges for lin_vel_x / lin_vel_y. Training ran with
+# heading_command = True, so its yaw-rate command was
+# clip(0.5 * heading_error, -1, 1); +-0.3 is a conservative subset of that.
+commands:
+  base_velocity:
+    ranges:
+      lin_vel_x: [-0.3, 0.6]
+      lin_vel_y: [-0.3, 0.3]
+      ang_vel_z: [-0.3, 0.3]
+
+# One 47-D frame, PaiFreeEnv.compute_observations() obs_buf:
+#   [0:2)   sin, cos of 2*pi*phase     phase = step * 0.02 / cycle_time
+#   [2:5)   vx*2, vy*2, wz*1           commands * commands_scale
+#   [5:17)  (q - default) * 1.0
+#   [17:29) dq * 0.05
+#   [29:41) previous action (clipped, unscaled)
+#   [41:44) body-frame angular velocity * 1.0   (obs_scales.ang_vel = 1.0)
+#   [44:47) roll, pitch, yaw * 1.0              (get_euler_xyz, (-pi, pi])
+# 15 frames, oldest first (deque append + stack), zero-filled on reset.
+# Clipped to +-18 (normalization.clip_observations).
+observations:
+  input:
+    clip: [-18.0, 18.0]
+    history:
+      type: frame_stack
+      length: 15
+      initial_value: zero
+      frame_dim: 47
+      total_dim: 705
+    terms:
+      - name: gait_phase
+        # PaiCfg.rewards.cycle_time = 0.4 s (training). sim2sim.py hard-codes
+        # 0.5; the vendor humanoidgym.yaml also uses 0.5 and a standing
+        # override -- both belong to other code paths, not this network.
+        # Training has NO standing override: the clock always runs.
+        params: { period: 0.4 }
+        scale: [1.0, 1.0]
+      - name: velocity_commands
+        # _resample_commands(): commands[:, :2] *= (norm(commands[:, :2]) > 0.2)
+        params: { min_lin_norm: 0.2 }
+        scale: [2.0, 2.0, 1.0]
+      - name: joint_pos_rel
+        scale: 1.0
+      - name: joint_vel
+        scale: 0.05
+      - name: last_action
+        scale: 1.0
+      - name: base_ang_vel
+        # obs_scales.ang_vel = 1.0. The vendor humanoidgym 0.5 is for a
+        # different network.
+        scale: 1.0
+      - name: base_euler
+        # Every training episode spawns with init_state.rot = identity, so
+        # observed yaw starts at 0. A real IMU heading is arbitrary.
+        params: { yaw: relative_to_entry }
+        scale: 1.0
+
+# target = clip(action, +-18) * 0.25 + default   (LeggedRobot._compute_torques,
+# normalization.clip_actions = 18, control.action_scale = 0.25).
+#
+# clip_output is a DEPLOYMENT q_target clamp, not part of training: the joint
+# position limits the training asset actually enforced, as reported by Isaac
+# Gym's get_asset_dof_properties() (policy order, robot space, radians). The
+# policy never saw a joint beyond these. NOTE ankle_roll is +-0.15 in the
+# training URDF but [-0.8, 0.3] / [-0.3, 0.8] in the robot's own URDF.
+actions:
+  - type: JointPositionAction
+    clip: [-18.0, 18.0]
+    scale: 0.25
+    offset: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+             0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+    clip_output:
+      lower: [-1.25, -0.12, -0.30, -0.65, -0.50, -0.15,
+              -1.25, -0.50, -0.60, -0.65, -0.50, -0.15]
+      upper: [ 1.75,  0.50,  0.60,  1.65,  1.30,  0.15,
+               1.75,  0.12,  0.30,  1.65,  1.30,  0.15]

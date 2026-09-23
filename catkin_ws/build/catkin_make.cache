@@ -1,2 +1,0 @@
-mini_pi_fsm
--DCATKIN_DEVEL_PREFIX=/home/hightorque/huy/catkin_ws/devel -DCMAKE_INSTALL_PREFIX=/home/hightorque/huy/catkin_ws/install -G Unix Makefiles

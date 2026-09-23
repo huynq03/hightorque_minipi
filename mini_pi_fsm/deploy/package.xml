@@ -1,0 +1,32 @@
+<?xml version="1.0"?>
+<package format="2">
+  <name>mini_pi_fsm</name>
+  <version>0.1.0</version>
+  <description>
+    FSM-based deployment framework for the HighTorque Mini-Pi (12 dof).
+    Structured after unitree_rl_mjlab/deploy; hardware access goes through the
+    HighTorque livelybot_serial SDK.
+  </description>
+  <maintainer email="buivuhai1105@gmail.com">huynq03</maintainer>
+  <license>Proprietary</license>
+
+  <buildtool_depend>catkin</buildtool_depend>
+
+  <depend>roscpp</depend>
+  <!-- ros::package::getPath() in src/main.cpp. Previously satisfied by
+       accident, transitively through livelybot_serial; a build without that
+       component (MINI_PI_ENABLE_REAL_HW=OFF, i.e. any PC) needs it by name,
+       and catkin_package() rejects a find_package()-ed catkin package that is
+       not declared here. Correct on both platforms. -->
+  <depend>roslib</depend>
+  <depend>sensor_msgs</depend>
+  <depend>geometry_msgs</depend>
+  <!-- Real-robot backend only. The HighTorque SDK ships as an aarch64 build
+       for the Mini-Pi, so a PC simulation build sets MINI_PI_ENABLE_REAL_HW=OFF
+       and never find_package()s it. Kept as an unconditional declaration
+       because that is what the robot's own build needs; catkin only objects to
+       a package that is found but undeclared, not to one declared but unused. -->
+  <depend>livelybot_serial</depend>
+
+  <exec_depend>joy</exec_depend>
+</package>
