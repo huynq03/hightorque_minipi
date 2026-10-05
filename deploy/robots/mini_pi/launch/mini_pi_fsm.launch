@@ -1,0 +1,124 @@
+<?xml version="1.0"?>
+<!--
+  Mini-Pi FSM controller.
+
+  This launch file deliberately does NOT start sim2real_master_node. Only one
+  process may own the motor output path; see doc/architecture.md.
+
+  Defaults to dry_run:=true. Starting it with dry_run:=false while the old
+  controller is running will fight it for the serial port.
+
+  ================================ BACKENDS ================================
+  backend:=hightorque  (default)  the physical Mini-Pi, via livelybot_serial.
+  backend:=sim                    a MuJoCo simulation, via the low-level UDP
+                                  bus and mini_pi_mujoco. See doc/simulation.md.
+
+  The FSM, the states, JointMapper, Safety, InputManager and every
+  config file are IDENTICAL in both cases. Only the hardware backend differs,
+  which is the whole point of the exercise.
+
+    real :  roslaunch mini_pi_fsm mini_pi_fsm.launch backend:=hightorque dry_run:=false
+    sim  :  ./mini_pi_mujoco                             # terminal 1
+            roslaunch mini_pi_fsm mini_pi_fsm.launch backend:=sim   # terminal 2
+
+  Under backend:=sim the hardware-side nodes are not started: the simulator
+  supplies the IMU over the low-level bus, and the livelybot robot_param file
+  describes serial ports that do not exist here. The joystick IS still started,
+  because InputManager is shared between the two backends unchanged.
+  ==========================================================================
+-->
+<launch>
+  <arg name="backend"  default="hightorque"
+       doc="hightorque | sim"/>
+
+  <!-- ============================== RL POLICY ==============================
+       policy_dir     override FSM.Velocity.policy_dir from fsm.yaml.
+       policy_version pin an exact version directory (default: the newest valid).
+       test_policy    permit a package that declares `simulation_only: true`.
+
+       test_policy is ONLY half of the gate. RLPolicyRunner additionally requires
+       the hardware backend to be a simulation, so setting it here cannot let a
+       simulation_only package reach real motors. It is forced false whenever the backend
+       is not `sim`, so the two can never be set inconsistently from here.
+
+         simulation_only package in sim (all on one line):
+           roslaunch mini_pi_fsm mini_pi_fsm.launch backend:=sim
+             test_policy:=true policy_dir:=<dir holding the package>
+       ====================================================================== -->
+  <arg name="policy_dir"     default=""/>
+  <arg name="policy_version" default=""/>
+  <arg name="test_policy"    default="false"/>
+
+  <!-- dry_run guards the physical motors. It has nothing to guard in
+       simulation, and a dry_run simulation simply never moves, so it defaults
+       to false there and stays true for the real robot. -->
+  <arg name="dry_run"  default="$(eval arg('backend') != 'sim')"/>
+
+  <arg name="dof_type" default="12"/>
+  <arg name="mcu_type" default="STM32H730"/>
+  <arg name="model_type" default="pi"/>
+  <arg name="design"   default="lubancat"/>
+  <arg name="start_imu" default="$(eval arg('backend') != 'sim')"/>
+  <arg name="start_joy" default="true"/>
+
+  <!-- Hardware description consumed by livelybot_serial::robot. Not loaded for
+       the simulated backend: nothing reads it there, and loading it would
+       advertise serial ports that do not exist. -->
+  <group unless="$(eval arg('backend') == 'sim')">
+    <rosparam file="$(find sim2real)/robot_param/$(arg dof_type)dof_$(arg mcu_type)_$(arg model_type)_$(arg design)_params.yaml"
+              command="load"/>
+  </group>
+
+  <group if="$(arg start_imu)">
+    <node pkg="yesense_imu" type="yesense_imu_node" name="yesense_imu_node"
+          required="false" output="screen" respawn="true" respawn_delay="3">
+      <param name="yesense_port" type="string" value="/dev/ttyS7"/>
+      <param name="yesense_baudrate" type="int" value="460800"/>
+    </node>
+  </group>
+
+  <arg name="joy_dev" default="/dev/input/js0"
+       doc="gamepad device; `ls /dev/input/js*` to find it"/>
+
+  <group if="$(arg start_joy)">
+    <node pkg="joy" type="joy_node" name="joy_node" output="screen">
+      <param name="dev" type="string" value="$(arg joy_dev)"/>
+      <!-- autorepeat_rate is NOT optional here. joy_node defaults to 0.0,
+           which publishes only when an axis or button CHANGES. A stick held
+           at full deflection then produces no messages at all, InputManager's
+           joy_timeout_s (robot.yaml) expires after 0.5 s, and the robot stops
+           while the operator is still pushing. 20 Hz keeps the held command
+           alive; it is the same reason the `keyboard` task passes
+           _repeat_rate:=20.0 to teleop_twist_keyboard. -->
+      <param name="autorepeat_rate" type="double" value="20.0"/>
+      <!-- Deliberately 0.0: the deadzone is owned by InputManager
+           (robot.yaml joy.deadzone), and these two COMPOSE rather than
+           agree.
+           joy_node's deadzone is on the normalized [-1, 1] range and it
+           rescales the remaining travel back to full scale, which is the
+           same thing InputManager::axisToRange() does. Setting both to 0.05
+           therefore gives an effective deadzone of
+           0.05 + 0.05 * (1 - 0.05) = 0.0975, and squashes the low end: a
+           stick at 0.10 came out as vx = 0.0017 instead of 0.0316.
+           With this at 0.0, a real stick and a /joy message published
+           directly (rostopic pub) are shaped identically. -->
+      <param name="deadzone" type="double" value="0.0"/>
+    </node>
+  </group>
+
+  <node pkg="mini_pi_fsm" type="mini_pi_fsm_node" name="mini_pi_fsm_node"
+        output="screen" required="true">
+    <param name="backend" type="string" value="$(arg backend)"/>
+    <param name="dry_run" type="bool" value="$(arg dry_run)"/>
+    <param name="robot_config"   value="$(find mini_pi_fsm)/config/robot.yaml"/>
+    <param name="mapping_config" value="$(find mini_pi_fsm)/config/mapping.yaml"/>
+    <param name="fsm_config"     value="$(find mini_pi_fsm)/config/fsm.yaml"/>
+    <param name="safety_config"  value="$(find mini_pi_fsm)/config/safety.yaml"/>
+    <param name="policy_config"  value="$(find mini_pi_fsm)/config/policy.yaml"/>
+    <param name="policy_dir"     type="string" value="$(arg policy_dir)"/>
+    <param name="policy_version" type="string" value="$(arg policy_version)"/>
+    <!-- Structurally cannot be true unless the backend is the simulator. -->
+    <param name="test_policy"    type="bool"
+           value="$(eval arg('test_policy') and arg('backend') == 'sim')"/>
+  </node>
+</launch>

@@ -1,0 +1,68 @@
+# Mini-Pi joint mapping.
+#
+# COORDINATE CONVENTION (verified against the original controller by
+# disassembling hightorque::common::transform* out of
+# install/lib/sim2real_master/sim2real_master_node -- those functions ship only
+# as a prebuilt .so). See doc/architecture.md for the full evidence.
+#
+#   Full mode
+#     motor -> robot :  robot_q[j]   = direction[j] * motor_q[map_index[j]] - joint_offset[j]
+#                       robot_dq[j]  = direction[j] * motor_dq[map_index[j]]
+#                       robot_tau[j] =                motor_tau[map_index[j]]
+#     robot -> motor :  motor_q[map_index[j]]   = direction[j] * (robot_q[j] + joint_offset[j])
+#                       motor_dq/tau[map_index[j]] = robot_dq/tau[j]     (no sign)
+#
+#   Identity mode
+#     permutation only; no direction, no offset, in either direction.
+#
+# PERMUTATION IS APPLIED EXACTLY ONCE, HERE. HighTorqueHardware addresses
+# livelybot_serial::robot::Motors[] raw and reorders nothing.
+
+# Which transform the controller uses. The original controller selects Identity
+# only for its `lr` algorithm and Full for everything else. No policy is
+# configured in this package yet, so Full -- the general convention -- is the
+# default. A future policy may need this changed; that decision is deferred.
+transform_mode: Full
+
+# Robot / URDF joint order. Identical to the joint declaration order in
+# clpai_12dof_0905/urdf/clpai_12dof_0905_rl.urdf, so robot order == URDF order.
+joint_names: [
+  "l_hip_pitch_joint", "l_hip_roll_joint", "l_thigh_joint",
+  "l_calf_joint", "l_ankle_pitch_joint", "l_ankle_roll_joint",
+  "r_hip_pitch_joint", "r_hip_roll_joint", "r_thigh_joint",
+  "r_calf_joint", "r_ankle_pitch_joint", "r_ankle_roll_joint"]
+
+# robot joint index -> index into livelybot_serial::robot::Motors.
+# Motors is ordered canboard -> canport -> motor id:
+#   0..5  = CANport_1 motor1..motor6
+#   6..11 = CANport_2 motor1..motor6
+# Source: sim2real/config/pi_pd_config.yaml `map_index`.
+#
+# NOTE: the `name:` labels in 12dof_STM32H730_pi_lubancat_params.yaml disagree
+# with this permutation for motor slots 3 and 5 (and 9 and 11). map_index is
+# authoritative -- the labels are used only by robot::publishJointStates() for
+# the diagnostic /error_joint_states topic and by no control path at all. The
+# URDF kinematic chain corroborates map_index. See doc/architecture.md.
+map_index: [5, 4, 3, 2, 1, 0, 11, 10, 9, 8, 7, 6]
+
+# Sign of each robot joint relative to its motor. INDEXED BY ROBOT JOINT INDEX.
+# Source: sim2real/config/pi_pd_config.yaml `direction`.
+direction: [ 1,  1, -1, -1,  1,  1,
+            -1,  1, -1,  1, -1,  1]
+
+# Offset between motor zero and robot zero, in ROBOT JOINT SPACE, radians.
+# INDEXED BY ROBOT JOINT INDEX.
+#
+# Source: sim2real/config/pi_pd_config.yaml `urdf_offset`. In the original
+# controller this array is passed as the `offset` argument of the motor<->robot
+# transform and nowhere else, which makes robot_q == 0 the nominal pose.
+# It is NOT added to a policy action; it belongs to the coordinate transform.
+#
+# A policy default pose, if a future policy needs one, is a separate quantity
+# that belongs to the policy layer. Do not merge it into this array.
+joint_offset: [-0.25, 0.00, 0.00, 0.65, -0.40, 0.00,
+               -0.25, 0.00, 0.00, 0.65, -0.40, 0.00]
+
+# Policy joint order deliberately remains absent here. The installed real
+# policy defines its left-first order in its own deploy.yaml; the policy Articulation (joint_ids_map) owns
+# that policy<->robot name mapping. JointMapper remains robot<->motor only.
