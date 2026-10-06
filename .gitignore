@@ -5,3 +5,4 @@ catkin_ws/Testing/
 catkin_ws/src/mini_pi_fsm
 logs/
 *.log
+*.deb
