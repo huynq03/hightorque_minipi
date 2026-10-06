@@ -9,8 +9,8 @@
 // types. See doc/architecture.md for the reasoning.
 #pragma once
 
-#include "Types.h"
-#include "HardwareInterface.h"
+#include "common/Types.h"
+#include "hardware/HardwareInterface.h"
 
 #include <ros/ros.h>
 #include <sensor_msgs/Imu.h>
@@ -28,7 +28,7 @@ namespace mini_pi
 /// Real-robot backend. Behaviour is unchanged from the version that ran
 /// Passive on the physical Mini-Pi; deriving from HardwareInterface added
 /// `override` keywords and backendName() and nothing else.
-class HighTorqueHardware : public HardwareInterface
+class HighTorqueHardware : public deploy::HardwareInterface
 {
 public:
     struct Config
@@ -80,13 +80,13 @@ public:
     /// Copy the latest motor feedback and IMU sample into `state`
     /// (motor-order fields and IMU only -- robot-order fields are filled by the
     /// caller through JointMapper). Returns state.motor_valid.
-    bool read(RobotState& state) override;
+    bool read(deploy::RobotState& state) override;
 
     /// Queue `cmd` into the SDK tx buffers and flush the frame.
     /// A no-op that returns true when dry_run is set.
-    bool write(const MotorCommand& cmd) override;
+    bool write(const deploy::MotorCommand& cmd) override;
 
-    HardwareStatus status() const override;
+    deploy::HardwareStatus status() const override;
 
     /// SDK-native damping hold: kp = 0, kd = 1, target 0/0/0. This mirrors
     /// hightorque::HtdwMotor::protectMotor() exactly (htdw_motor.cpp).
@@ -98,9 +98,9 @@ public:
 
     std::size_t motorCount() const override { return motor_count_; }
     /// Motors whose last frame is older than motor_timeout_s, as of the last
-    /// read(). MINI_PI_DOF until the first successful read.
+    /// read(). deploy::NUM_DOF until the first successful read.
     std::size_t staleMotorCount() const { return stale_motor_count_; }
-    double imuAge() const { return age_seconds(imu_stamp_); }
+    double imuAge() const { return deploy::age_seconds(imu_stamp_); }
     bool dryRun() const override { return cfg_.dry_run; }
     const std::vector<std::string>& motorNames() const override { return motor_names_; }
     const std::vector<int>& motorIds() const override { return motor_ids_; }
@@ -128,24 +128,24 @@ private:
     std::vector<int> motor_ids_;
 
     /// Per-motor last-frame wall time, as reported by motor_back_t::time.
-    std::array<double, MINI_PI_DOF> last_feedback_time_{};
+    std::array<double, deploy::NUM_DOF> last_feedback_time_{};
     /// Per-motor steady_clock stamp of when that value last advanced.
-    std::array<TimePoint, MINI_PI_DOF> motor_stamp_per_{};
-    std::array<bool, MINI_PI_DOF> motor_seen_{};
-    std::size_t stale_motor_count_ = MINI_PI_DOF;
+    std::array<deploy::TimePoint, deploy::NUM_DOF> motor_stamp_per_{};
+    std::array<bool, deploy::NUM_DOF> motor_seen_{};
+    std::size_t stale_motor_count_ = deploy::NUM_DOF;
 
     void queryFeedback_();
 
-    TimePoint last_tx_{};   ///< last command OR query frame transmitted
+    deploy::TimePoint last_tx_{};   ///< last command OR query frame transmitted
     std::uint64_t feedback_queries_ = 0;
 
     mutable std::mutex imu_mutex_;
     std::array<double, 3> imu_ang_vel_{};
     std::array<double, 4> imu_quat_{{0, 0, 0, 1}};
-    TimePoint imu_stamp_{};
+    deploy::TimePoint imu_stamp_{};
     bool imu_valid_ = false;
 
-    TimePoint motor_stamp_{};   ///< oldest across all motors
+    deploy::TimePoint motor_stamp_{};   ///< oldest across all motors
     bool motor_valid_ = false;
     bool motor_fault_ = false;
     bool initialized_ = false;

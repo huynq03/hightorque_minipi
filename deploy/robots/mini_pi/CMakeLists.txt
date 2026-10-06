@@ -5,10 +5,13 @@
 cmake_minimum_required(VERSION 3.10)
 project(mini_pi_fsm)
 
-# This package is deploy/robots/mini_pi. The robot-independent policy runtime
-# (Unitree's isaaclab/ layout) lives two levels up in deploy/include/isaaclab
-# and deploy/src/isaaclab and is compiled straight into this package -- no
-# prebuilt library. The catkin workspace reaches this directory through a
+# This package is deploy/robots/mini_pi. Like unitree_rl_mjlab/deploy, the
+# robot-independent code -- FSM, states, Safety, JointMapper, input, policy
+# runtime, simulated backend and the node body -- lives two levels up in
+# deploy/include and deploy/src and is compiled straight into this package (no
+# prebuilt library). This directory adds only what is Mini-Pi's own:
+# include/RobotSpec.h, the HighTorque backend, the backend factory, main.cpp
+# and config/. The catkin workspace reaches this directory through a
 # symlink, so resolve it first: a lexical "../.." from the link would land in
 # the workspace instead of deploy/.
 get_filename_component(MINI_PI_PKG_DIR "${CMAKE_CURRENT_SOURCE_DIR}" REALPATH)
@@ -171,38 +174,14 @@ if(MINI_PI_ENABLE_REAL_HW)
 endif()
 
 # ---- the controller ---------------------------------------------------------
-# One library, shared by every build. Splitting the FSM out from the backends
-# into separate libraries was considered and rejected: the backend boundary is
-# already a single source file plus one #if, and a three-library split would
-# change the exported catkin target set and the install rules without removing
-# a single line of duplication. There is no duplicated source either way.
+# One library: the shared deploy sources (deploy/cmake/deploy_sources.cmake)
+# plus the Mini-Pi's own. The HighTorque backend is appended below when the SDK
+# is available.
+include(${MINI_PI_DEPLOY_DIR}/cmake/deploy_sources.cmake)
 set(MINI_PI_SOURCES
-  # Shared, robot-independent policy runtime (deploy/src/isaaclab). Compiled
-  # unconditionally -- only the ONNX Runtime backend inside algorithms.cpp is
-  # conditional.
-  ${MINI_PI_DEPLOY_DIR}/src/isaaclab/algorithms/algorithms.cpp
-  ${MINI_PI_DEPLOY_DIR}/src/isaaclab/manager/observation_manager.cpp
-  ${MINI_PI_DEPLOY_DIR}/src/isaaclab/envs/manager_based_rl_env.cpp
-  # Mini-Pi.
-  src/JointMapper.cpp
-  # Every runtime safety check, the fault latch and the one exit to hardware.
-  src/Safety.cpp
-  src/InputManager.cpp
-  src/KeyboardReader.cpp
-  # The one policy thread the FSM uses.
-  src/RLPolicyRunner.cpp
-  # Startup readiness: runs before CtrlFSM starts, not a state.
-  src/SystemReadiness.cpp
-  src/FSMState.cpp
-  src/CtrlFSM.cpp
-  src/State_Passive.cpp
-  src/State_FixStand.cpp
-  src/State_RLBase.cpp
-  # Backend selection. The only translation unit that names a concrete
-  # backend; see include/HardwareBackend.h.
+  ${DEPLOY_SOURCES}
+  # Real-backend selection; see include/HardwareBackend.h.
   src/HardwareBackend.cpp
-  # Simulation backend: pure sockets, buildable on every platform.
-  src/SimHardware.cpp
   src/VendorConflict.cpp
 )
 
@@ -246,7 +225,7 @@ target_link_libraries(${PROJECT_NAME}_node ${PROJECT_NAME} ${catkin_LIBRARIES})
 # Resolves and fully loads one policy package with the controller's own
 # RLPolicyRunner, exactly as the node would; scripts/sim.sh runs it first.
 #   rosrun mini_pi_fsm policy_check <path/to/config> [version]
-add_executable(policy_check tools/policy_check.cpp)
+add_executable(policy_check ${DEPLOY_POLICY_CHECK_SOURCE})
 target_compile_options(policy_check PRIVATE ${MINI_PI_WARN})
 add_dependencies(policy_check ${catkin_EXPORTED_TARGETS})
 target_link_libraries(policy_check ${PROJECT_NAME} ${catkin_LIBRARIES})

@@ -1,0 +1,112 @@
+# HighTorque `pi_wbc` walking policy, as an ordinary policy package.
+#
+# Model source (copied, never modified; md5 4a67c7a9bfe3196e1ced24750faecde7):
+#   /home/hightorque/pai/install/share/pai_control/model/pi_wbc_20250122_v1.onnx
+# ONNX: input 'input' [batch, 345], output 'output' [batch, 12], MLP 512-256-128.
+#
+# Values come from the vendor's runtime configuration
+#   /home/hightorque/pai/install/share/pai_control/param/pai_model.yaml
+# and from what libpai_control.so hard-codes (500 Hz loop, inference every 10
+# ticks, +-18 action clip, dq * 0.05, the gait reference, the +0.2 s
+# look-ahead) -- see doc/policy_format.md (origin_pi).
+#
+# NOT hardware-verified through THIS controller yet. Select it explicitly
+# (policy.yaml `version: origin_pi` or policy_version:=origin_pi).
+
+# Vendor ros::Rate(500), inference when count % 10 == 0 -> 0.02 s (50 Hz).
+step_dt: 0.02
+
+# Vendor motor_map order == mapping.yaml map_index order, i.e. robot order.
+joint_names: [
+  "l_hip_pitch_joint", "l_hip_roll_joint", "l_thigh_joint",
+  "l_calf_joint", "l_ankle_pitch_joint", "l_ankle_roll_joint",
+  "r_hip_pitch_joint", "r_hip_roll_joint", "r_thigh_joint",
+  "r_calf_joint", "r_ankle_pitch_joint", "r_ankle_roll_joint"]
+
+# The vendor network has no default pose: q_target = clip(a, +-18) * 0.25.
+default_joint_pos: 0.0
+
+# The joint coordinate the network was trained / deployed in is the vendor's
+# own motor->joint calibration (pai_model.yaml motor_offset):
+#   q_v = motor_dir * motor_q[motor_map] - motor_offset
+# motor_map / motor_dir equal mapping.yaml map_index / direction, so the
+# runtime observes and commands q_v = robot_q + (mapping joint_offset -
+# motor_offset), taking joint_offset from the LIVE mapping.yaml. Recalibrating
+# mapping.yaml needs no edit here. (Today: hip pitch -0.24 vs -0.25 -> 0.01.)
+calibration:
+  joint_offset: [-0.24, 0.0, 0.0, 0.65, -0.4, 0.0,
+                 -0.24, 0.0, 0.0, 0.65, -0.4, 0.0]
+
+# kp = kps * kpRate = 80 * 1.0, kd = kds * kdRate = 1.1 * 1.0. The vendor
+# evaluates this PD on the CPU; here it goes to the motors' own PD.
+stiffness: 80.0
+damping: 1.1
+
+# Vendor max_linear_x / max_linear_y / max_angular_z: command = stick * max.
+# Units are the vendor's: in MuJoCo cmd 1.0 -> ~0.47 m/s.
+commands:
+  base_velocity:
+    ranges:
+      lin_vel_x: [-2.2, 2.2]
+      lin_vel_y: [-2.2, 2.2]
+      ang_vel_z: [-2.5, 2.5]
+
+# One 69-D frame, 5 frames oldest first, zero-filled on reset, no clip:
+#   [ 0: 3)  command vx, vy, wz (clamped, unscaled)
+#   [ 3:27)  gait reference at t and at t + 0.2 s (12 + 12)
+#   [27:39)  q in the vendor calibration    (= the vendor q_v)
+#   [39:51)  dq * 0.05
+#   [51:63)  previous action after the +-18 clip
+#   [63:66)  gyro (unscaled)
+#   [66:69)  roll, pitch, yaw -- yaw ABSOLUTE (tf2 getRPY)
+observations:
+  input:
+    use_gym_history: true
+    history_init: zero
+    velocity_commands:
+      history_length: 5
+    gait_joint_reference:
+      # computeRefDofPos(t, cycle_time, joint_scale): t = count * 0.002 s,
+      # amplitude joint_scale * max(|vx|, |wz|) (pure vy -> no stepping),
+      # |sin| <= 0.1 -> zeros. Only hip pitch, knee, ankle pitch move:
+      #   left swing  (sin < 0): hip +1, knee -2, ankle +1   (x sin * A)
+      #   right swing (sin > 0): hip -1, knee +2, ankle -1
+      params:
+        period: 0.64          # cycle_time
+        amplitude: 0.15       # joint_scale
+        deadband: 0.1
+        time_offsets: [0.0, 0.2]
+        left_coeffs:  [1, 0, 0, -2, 1, 0,   0, 0, 0,  0,  0, 0]
+        right_coeffs: [0, 0, 0,  0, 0, 0,  -1, 0, 0,  2, -1, 0]
+      history_length: 5
+    joint_pos_rel:
+      history_length: 5
+    joint_vel:
+      scale: 0.05
+      history_length: 5
+    last_action:
+      history_length: 5
+    base_ang_vel:
+      history_length: 5
+    base_euler:
+      params: {yaw: absolute}
+      history_length: 5
+
+# q_t = clip(a, +-18) * actionRate (0.25) in vendor coordinates; the runtime
+# maps it back through `calibration` to the robot command.
+actions:
+  JointPositionAction:
+    raw_clip: [-18.0, 18.0]
+    scale: 0.25
+
+# Magnitude one locomotion key commands. 1.0 -> ~0.47 m/s / ~0.5 rad/s in
+# MuJoCo; the gait amplitude is joint_scale * max(|vx|, |wz|).
+operator:
+  keyboard:
+    linear_step: 1.0
+    yaw_step: 1.0
+
+# Present in pai_model.yaml but NOT reproduced by this controller:
+#   tau_limits: [16, 16, 16, 16, 16, 6, 16, 16, 16, 16, 16, 6]  (vendor CPU torque clamp)
+#   joint_position_limit_max/min: +-0.5                         (unused by step())
+#   the vendor 1 s start-up torque ramp (the FSM enters RL from FixStand)

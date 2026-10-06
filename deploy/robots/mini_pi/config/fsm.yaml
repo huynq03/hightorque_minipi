@@ -81,7 +81,7 @@ FSM:
 
     # WHICH policy to run. Relative paths resolve against the installed package
     # share directory. The production resolver currently selects the installed
-    # real v0 package. A missing or invalid package still leaves RLPolicyRunner in
+    # real isaaclab_pi package. A missing or invalid package still leaves RLPolicyRunner in
     # POLICY_NOT_CONFIGURED and makes CtrlFSM refuse entry to this state.
     policy_dir: config/policy/velocity
 

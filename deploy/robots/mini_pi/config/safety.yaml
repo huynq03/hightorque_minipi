@@ -14,7 +14,7 @@
 #    torque limit (tau_max)      training clamp was 17.85 N*m, vendor lists 35,
 #                                URDF effort 21; the MOTOR's limit is unknown
 #  POLICY-SIDE q_target clamp (not here): policy package clip_output = the
-#  training DOF limits; see config/policy/velocity/v0/params/deploy.yaml.
+#  training DOF limits; see config/policy/velocity/isaaclab_pi/params/deploy.yaml.
 # ============================================================================
 #
 # ======================== INDEX / COORDINATE SEMANTICS =======================

@@ -134,6 +134,13 @@ joy:
   axis_vx: 1        # left stick vertical
   axis_vy: 0        # left stick horizontal
   axis_dyaw: 3      # right stick horizontal
+  # Buttons (F710 / xbox layout, HighTorque joy.yaml). Omit to keep these defaults.
+  # btn_a: 0
+  # btn_b: 1
+  # btn_x: 2
+  # btn_y: 3
+  # btn_lb: 4
+  # btn_rb: 5
   # The ONLY deadzone in the path. joy_node has its own `deadzone` param and
   # it rescales the remaining travel to full scale exactly as this does, so
   # the two would compose, not agree: 0.05 in both places means an effective
@@ -145,7 +152,7 @@ joy:
   # unless `autorepeat_rate` is set, which the launch file does.
   timeout_s: 0.5
   # What a full stick deflection means is NOT set here: the command ranges
-  # belong to the selected policy package (RLPolicyRunner::operatorEnvelope, e.g. v0's
+  # belong to the selected policy package (RLPolicyRunner::operatorEnvelope, e.g. isaaclab_pi's
   # commands.base_velocity.ranges) and are applied by main() at startup.
 
 # --- keyboard ----------------------------------------------------------------

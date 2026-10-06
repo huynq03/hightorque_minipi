@@ -1,0 +1,75 @@
+# mjlab Mini-Pi velocity actor in the Unitree observation layout -- a
+# config-only policy package. NO base_lin_vel in the actor (critic only), so it
+# runs on the real robot without a velocity source.
+#
+# Model (copied, never modified; md5 fe1408e54ac6f673f218d5c2154abf64):
+#   model_1450.onnx, mjlab run 2026-10-05_22-28-02, iter 1450, task
+#   Mjlab-Velocity-Flat-MiniPi (/home/huynq/mjlab, commit 5ae450e88 "change
+#   policy form to unitree", the code the run started from)
+#   input 'obs' float32 [1, 47] -> output 'actions' float32 [1, 12]
+#   The observation normalizer is INSIDE the graph: feed raw SI values.
+# Joint names, gains, default pose, observation names, scales 1, history 1,
+# no clip and action_scale 0.25 match the metadata mjlab embedded in the ONNX.
+# Differences from mjlab50: no base_lin_vel, term order, joint_pos unbiased.
+
+# mjlab sim dt 0.002 x decimation 10.
+step_dt: 0.02
+
+# POLICY order = mjlab joint / action order: RIGHT leg first. Resolved by name
+# against mapping.yaml (left first).
+joint_names: [
+  "r_hip_pitch_joint", "r_hip_roll_joint", "r_thigh_joint",
+  "r_calf_joint", "r_ankle_pitch_joint", "r_ankle_roll_joint",
+  "l_hip_pitch_joint", "l_hip_roll_joint", "l_thigh_joint",
+  "l_calf_joint", "l_ankle_pitch_joint", "l_ankle_roll_joint"]
+
+# HOME_KEYFRAME: all zero (the MJCF bakes the stance into the body frames).
+default_joint_pos: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+                    0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+
+# Training actuator gains (minipi_constants.py), policy order.
+#            hip_pitch hip_roll thigh calf ankle_pitch ankle_roll
+stiffness: [60.0, 40.0, 20.0, 60.0, 30.0, 10.0,
+            60.0, 40.0, 20.0, 60.0, 30.0, 10.0]
+damping:   [2.4, 0.8, 0.4, 2.8, 1.6, 0.3,
+            2.4, 0.8, 0.4, 2.8, 1.6, 0.3]
+
+# twist_cmd.ranges at 5ae450e88. Clamped by velocity_commands; also the
+# operator envelope.
+commands:
+  base_velocity:
+    ranges:
+      lin_vel_x: [-0.35, 0.55]
+      lin_vel_y: [-0.20, 0.20]
+      ang_vel_z: [-1.50, 1.50]
+
+# One 47-D frame, mjlab actor_terms order (Unitree layout). History 1, no clip,
+# every scale 1. Single group "obs" = the ONNX input name.
+observations:
+  base_ang_vel: {}            # [0:3)   rad/s
+  projected_gravity: {}       # [3:6)   R_wb^T [0,0,-1]
+  velocity_commands:          # [6:9)   vx, vy, wz, SI; command_deadzone 0.1:
+    params: {deadzone: 0.1}   #         ||cmd|| <= 0.1 -> all zero
+  gait_phase:                 # [9:11)  mdp.phase: [sin, cos] of
+    params:                   #         2pi * (step * 0.02 mod 0.5) / 0.5,
+      period: 0.5             #         zero while ||cmd|| <= 0.1
+      zero_on_stand: true
+      stand_threshold: 0.1
+  joint_pos_rel: {}           # [11:23) q - default_joint_pos
+  joint_vel: {}               # [23:35) rad/s (NOT x0.05)
+  last_action: {}             # [35:47) raw output t-1 (no raw_clip below)
+
+# q_target = 0.25 * raw + 0. No raw_clip, so last_action is the raw output,
+# exactly mjlab's last_action (= action_manager.action).
+actions:
+  JointPositionAction:
+    scale: 0.25
+    offset: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+             0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+
+# One key press. Operator convenience, not training. Above the 0.1 deadzone so
+# that a single press already moves the robot.
+operator:
+  keyboard:
+    linear_step: 0.15   # m/s
+    yaw_step: 0.30      # rad/s

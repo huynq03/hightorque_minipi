@@ -11,6 +11,8 @@
 namespace mini_pi
 {
 
+using namespace ::deploy;
+
 HighTorqueHardware::~HighTorqueHardware()
 {
     // livelybot_serial::robot's destructor already issues set_stop() +
@@ -35,11 +37,11 @@ bool HighTorqueHardware::initialize(ros::NodeHandle& nh, const Config& cfg)
     }
 
     motor_count_ = rb_->Motors.size();
-    if (motor_count_ != MINI_PI_DOF)
+    if (motor_count_ != NUM_DOF)
     {
         ROS_ERROR("HighTorqueHardware: SDK discovered %zu motors, this package expects %zu. "
                   "Check the robot_param yaml loaded into the parameter server.",
-                  motor_count_, MINI_PI_DOF);
+                  motor_count_, NUM_DOF);
         rb_.reset();
         return false;
     }
@@ -142,7 +144,7 @@ bool HighTorqueHardware::read(RobotState& state)
     std::size_t stale = 0;
     TimePoint oldest = now;
 
-    for (std::size_t i = 0; i < MINI_PI_DOF; ++i)
+    for (std::size_t i = 0; i < NUM_DOF; ++i)
     {
         const motor_back_t* d = rb_->Motors[i]->get_current_motor_state();
 
@@ -225,7 +227,7 @@ bool HighTorqueHardware::write(const MotorCommand& cmd)
     // constructing livelybot_serial::robot, and MODE_STOP from its destructor.)
     if (cfg_.dry_run) return true;
 
-    for (std::size_t i = 0; i < MINI_PI_DOF; ++i)
+    for (std::size_t i = 0; i < NUM_DOF; ++i)
     {
         // POS_VEL_TQE_KP_KD2 -- matches `control_type: 12` in
         // 12dof_STM32H730_pi_lubancat_params.yaml and MotorControlType::
@@ -253,7 +255,7 @@ void HighTorqueHardware::protect()
     }
     // Identical to hightorque::HtdwMotor::protectMotor(): kp = 0, kd = 1,
     // zero position/velocity/torque targets -> pure joint damping.
-    for (std::size_t i = 0; i < MINI_PI_DOF; ++i)
+    for (std::size_t i = 0; i < NUM_DOF; ++i)
     {
         rb_->Motors[i]->pos_vel_tqe_kp_kd2(0.f, 0.f, 0.f, 0.f, 1.f);
     }
