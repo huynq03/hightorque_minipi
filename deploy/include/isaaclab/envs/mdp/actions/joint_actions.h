@@ -11,6 +11,13 @@
 //   joint_ids null               every policy joint (subsets unsupported)
 //
 //   target = clip(clamp(raw, raw_clip) * scale + offset)
+//
+// RelativeJointPositionAction: processed = clamp(raw, raw_clip) * scale is a
+// delta; the robot commands clip(q_measured + delta), re-based on every control
+// tick (mjlab RelativeJointPositionAction). `clip` bounds that ABSOLUTE target:
+// set it to the training joint limits, which held the joints in simulation --
+// without it a policy that leans on a limit drives the joint on and on.
+// `offset` is rejected.
 #pragma once
 
 #include "isaaclab/envs/manager_based_rl_env.h"
@@ -54,6 +61,7 @@ public:
     }
 
     int action_dim() const override { return dim_; }
+    const std::vector<std::vector<float>>& target_clip() const override { return clip_; }
     const std::vector<float>& raw_actions() const override { return raw_; }
     const std::vector<float>& processed_actions() const override { return processed_; }
 
@@ -79,9 +87,16 @@ public:
     std::string describe() const override
     {
         std::ostringstream os;
-        os << "    JointAction dim " << dim_;
+        os << "    JointAction dim " << dim_ << (relative() ? " (relative: target = clip(q + delta))" : "");
         if (!raw_clip_.empty()) os << ", raw clip [" << raw_clip_[0] << ", " << raw_clip_[1] << "]";
         if (!clip_.empty()) os << ", target clip per joint";
+        if (!clip_.empty() && relative())
+        {
+            os << "\n      clip  =[";
+            for (std::size_t i = 0; i < n(); ++i)
+                os << (i ? " " : "") << "[" << clip_[i][0] << "," << clip_[i][1] << "]";
+            os << "]";
+        }
         os << "\n      scale =[";
         for (std::size_t i = 0; i < n(); ++i) os << (i ? " " : "") << scale_[i];
         os << "]\n      offset=[";
@@ -113,5 +128,33 @@ public:
 };
 
 REGISTER_ACTION(JointPositionAction)
+
+class RelativeJointPositionAction : public JointAction
+{
+public:
+    RelativeJointPositionAction(const YAML::Node& cfg, ManagerBasedRLEnv* env)
+        : JointAction(cfg, env)
+    {
+        if (cfg["offset"] && !cfg["offset"].IsNull())
+            throw std::runtime_error("RelativeJointPositionAction: `offset` is not supported "
+                                     "(target = clip(q + raw * scale))");
+        offset_.assign(n(), 0.0f);
+    }
+
+    bool relative() const override { return true; }
+
+    /// The delta only; `clip` applies to q + delta where q is measured.
+    void process_actions(const std::vector<float>& actions) override
+    {
+        for (std::size_t i = 0; i < n(); ++i)
+        {
+            raw_[i] = raw_clip_.empty() ? actions[i]
+                                        : std::clamp(actions[i], raw_clip_[0], raw_clip_[1]);
+            processed_[i] = raw_[i] * scale_[i];
+        }
+    }
+};
+
+REGISTER_ACTION(RelativeJointPositionAction)
 
 } // namespace isaaclab

@@ -181,6 +181,18 @@ REGISTER_OBSERVATION(last_action)
     return env->action_manager->action();
 }
 
+// ---- constants --------------------------------------------------------------
+
+/// A fixed vector, e.g. an action scale the network observes.
+/// Params: value  scalar | [v0, v1, ...] (required).
+REGISTER_OBSERVATION(constant)
+{
+    (void)env;
+    if (!params["value"]) throw std::runtime_error("constant: params.value is required");
+    if (params["value"].IsScalar()) return {params["value"].as<float>()};
+    return params["value"].as<std::vector<float>>();
+}
+
 // ---- commands and gait ------------------------------------------------------
 
 /// vx, vy, wz clamped to commands.base_velocity.ranges.

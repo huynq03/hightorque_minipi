@@ -12,6 +12,7 @@ FSMState::FSMState(int state, std::string state_string, ControlContext* ctx)
 {
     ROS_INFO("Initializing State_%s ...", state_string.c_str());
     if (fsm_config::node["FSM"]) cfg_ = fsm_config::node["FSM"][state_string];
+    tolerate_tilt_ = cfg_ && cfg_["tolerate_tilt"] && cfg_["tolerate_tilt"].as<bool>();
     registerTransitions();
 }
 
@@ -25,6 +26,7 @@ void FSMState::registerTransitions()
         if (name == "stand")   return [in] { return in->requestStand(); };
         if (name == "rl")      return [in] { return in->requestRL(); };
         if (name == "reset")   return [in] { return in->requestReset(); };
+        if (name == "recover") return [in] { return in->requestRecover(); };
         if (name == "always")  return [] { return true; };
         return nullptr;
     };
@@ -46,7 +48,7 @@ void FSMState::registerTransitions()
             if (!fn)
             {
                 ROS_ERROR("FSM: unknown transition trigger '%s' (state %s -> %s). "
-                          "Valid: passive, stand, rl, reset, always.",
+                          "Valid: passive, stand, rl, recover, reset, always.",
                           cond.c_str(), getStateString().c_str(), target.c_str());
                 continue;
             }

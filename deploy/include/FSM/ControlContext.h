@@ -12,6 +12,7 @@
 #include "input/InputManager.h"
 #include "policy/RLPolicyRunner.h"
 
+#include <map>
 #include <mutex>
 #include <string>
 
@@ -30,7 +31,11 @@ struct ControlContext
     /// the FSM to the low-level bus (Safety::publish).
     Safety*             safety   = nullptr;
     InputManager*       input    = nullptr;
+    /// The primary RL state's runner (policy.yaml `state`): its package sets
+    /// the operator envelope.
     RLPolicyRunner*     policy   = nullptr;
+    /// One runner per RLBase state, keyed by state name (includes `policy`).
+    std::map<std::string, RLPolicyRunner*> policies;
 
     /// Latest fused state, written once per control cycle by CtrlFSM.
     RobotState* state = nullptr;
@@ -53,6 +58,13 @@ struct ControlContext
         hardware->read(s);
         mapper->motorToRobot(s.motor_q, s.motor_dq, s.motor_tau,
                              s.robot_q, s.robot_dq, s.robot_tau);
+    }
+
+    /// The runner of RLBase state `name`, or nullptr.
+    RLPolicyRunner* policyFor(const std::string& name) const
+    {
+        const auto it = policies.find(name);
+        return it == policies.end() ? nullptr : it->second;
     }
 
     bool valid() const

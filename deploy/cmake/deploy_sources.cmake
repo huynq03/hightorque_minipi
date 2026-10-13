@@ -34,4 +34,6 @@ set(DEPLOY_SOURCES
   ${_deploy_dir}/src/hardware/SimHardware.cpp
   # The node body every robot's main.cpp calls.
   ${_deploy_dir}/src/app/DeployApp.cpp
+  # Optional high-rate CSV / JointState log (launch record:=true).
+  ${_deploy_dir}/src/app/DataRecorder.cpp
 )

@@ -3,6 +3,7 @@
 // Setup and diagnostics only. No control logic lives here -- the control loop
 // itself is owned by CtrlFSM.
 #include "app/DeployApp.h"
+#include "app/DataRecorder.h"
 
 #include "FSM/CtrlFSM.h"
 #include "FSM/FSMState.h"
@@ -19,6 +20,8 @@
 
 #include <algorithm>
 #include <cstdio>
+#include <cstdlib>
+#include <ctime>
 #include <iostream>
 #include <cmath>
 #include <iomanip>
@@ -82,20 +85,23 @@ std::string diagnostics(const ControlContext& ctx, const CtrlFSM& fsm)
     os << "hardware         : " << to_string(ctx.hardware->status())
        << "   motors=" << ctx.hardware->motorCount()
        << "  stale=" << s.stale_motor_count << "\n";
-    os << "policy           : " << to_string(ctx.policy->status());
-    if (ctx.policy->ready())
+    // The current RL state's runner, else the primary one.
+    const RLPolicyRunner* pol = ctx.policyFor(fsm.currentStateName());
+    if (!pol) pol = ctx.policy;
+    os << "policy           : " << pol->stateName() << " " << to_string(pol->status());
+    if (pol->ready())
     {
-        const double period = ctx.policy->measuredPeriod();
-        const PolicyTiming tm = ctx.policy->timing();
-        os << "  pkg=" << ctx.policy->package().version
-           << "  thread=" << (ctx.policy->running() ? "RUNNING" : "stopped")
-           << "  steps=" << ctx.policy->steps()
+        const double period = pol->measuredPeriod();
+        const PolicyTiming tm = pol->timing();
+        os << "  pkg=" << pol->package().version
+           << "  thread=" << (pol->running() ? "RUNNING" : "stopped")
+           << "  steps=" << pol->steps()
            << "  rate=" << (period > 0.0 ? 1.0 / period : 0.0) << " Hz"
            << "  step_avg=" << tm.mean_update * 1e3 << " ms"
            << "  step_max=" << tm.max_update * 1e3 << " ms";
-        const auto t = ctx.policy->latest();
+        const auto t = pol->latest();
         os << "  cmd_age=" << (t.valid ? age_seconds(t.stamp) : -1.0) << " s";
-        if (ctx.policy->failed()) os << "  FAILED: " << ctx.policy->failureReason();
+        if (pol->failed()) os << "  FAILED: " << pol->failureReason();
         os << "\npolicy timing    : period last/min/max " << tm.last_period * 1e3 << "/"
            << tm.min_period * 1e3 << "/" << tm.max_period * 1e3 << " ms  update last/max "
            << tm.last_update * 1e3 << "/" << tm.max_update * 1e3 << " ms  overruns " << tm.overruns
@@ -103,8 +109,8 @@ std::string diagnostics(const ControlContext& ctx, const CtrlFSM& fsm)
            << std::dec << "  clamped commands " << ctx.safety->clampedCommands();
         // Why Velocity would be refused right now (e.g. an observation the
         // selected policy needs has no valid source on this backend).
-        if (!ctx.policy->running())
-            if (const std::string b = ctx.policy->entryBlocker(s); !b.empty())
+        if (!pol->running())
+            if (const std::string b = pol->entryBlocker(s); !b.empty())
                 os << "\nRL entry blocked : " << b;
         if (t.valid)
         {
@@ -119,7 +125,7 @@ std::string diagnostics(const ControlContext& ctx, const CtrlFSM& fsm)
             // The newest observation frame, sliced into named fields by the
             // policy itself. On the robot in dry run this is how IMU signs and
             // joint signs are seen exactly as the network would see them.
-            os << ctx.policy->describeFrame(ctx.policy->latestFrame());
+            os << pol->describeFrame(pol->latestFrame());
             os << "\n  action (policy order)  :";
             for (double v : t.action) os << " " << v;
             os << "\n  q_target (robot order) :";
@@ -128,7 +134,7 @@ std::string diagnostics(const ControlContext& ctx, const CtrlFSM& fsm)
     }
     else
     {
-        os << "  (" << ctx.policy->unavailableReason() << ")";
+        os << "  (" << pol->unavailableReason() << ")";
     }
     os << "\n";
     // The operator's velocity intent exactly as State_RLBase hands it to the
@@ -369,6 +375,7 @@ int runDeployNode(int argc, char** argv, const RobotApp& app)
             opt_k("passive",   in_cfg.key_passive);
             opt_k("stand",     in_cfg.key_stand);
             opt_k("rl",        in_cfg.key_rl);
+            opt_k("recover",   in_cfg.key_recover);
             opt_k("reset",     in_cfg.key_reset);
         }
     }
@@ -388,6 +395,7 @@ int runDeployNode(int argc, char** argv, const RobotApp& app)
     // POLICY_NOT_CONFIGURED, CtrlFSM refuses every transition into an RLBase
     // state, and the non-RL flow is unaffected.
     auto policy = std::make_unique<RLPolicyRunner>();
+    std::vector<std::unique_ptr<RLPolicyRunner>> extra_policies;
     {
         RLPolicyRunner::Options po;
         po.fsm = fsm_config::node["FSM"];
@@ -410,6 +418,22 @@ int runDeployNode(int argc, char** argv, const RobotApp& app)
                   po.allow_test_policy_override);
 
         if (!policy->initialize(policy_yaml, po)) return 1;
+
+        // Every other RLBase state gets its own runner and package
+        // (FSM.<state>.policy_dir / policy_version); the overrides above stay
+        // with the primary state.
+        for (const auto& it : fsm_config::node["FSM"]["_"])
+        {
+            const std::string name = it.first.as<std::string>();
+            const YAML::Node type = it.second["type"];
+            if (!type || type.as<std::string>() != "RLBase" || name == policy->stateName())
+                continue;
+            RLPolicyRunner::Options so = po;
+            so.state = name;
+            auto r = std::make_unique<RLPolicyRunner>();
+            if (!r->initialize(policy_yaml, so)) return 1;
+            extra_policies.push_back(std::move(r));
+        }
     }
 
     // ---- operator envelope from the policy -------------------------------
@@ -447,6 +471,8 @@ int runDeployNode(int argc, char** argv, const RobotApp& app)
     ctx.safety      = safety.get();
     ctx.input       = input.get();
     ctx.policy      = policy.get();
+    ctx.policies[policy->stateName()] = policy.get();
+    for (const auto& r : extra_policies) ctx.policies[r->stateName()] = r.get();
     ctx.state       = &state;
     ctx.command     = &command;
     ctx.state_mutex = &state_mutex;
@@ -509,6 +535,33 @@ int runDeployNode(int argc, char** argv, const RobotApp& app)
     // Passive, always and explicitly -- the safe operating mode.
     fsm->start("Passive");
 
+    // Optional high-rate log (launch `record:=true`): CSV + JointState topics.
+    std::unique_ptr<DataRecorder> recorder;
+    {
+        bool record = false;
+        pnh.param("record", record, record);
+        if (record)
+        {
+            DataRecorder::Config rc;
+            pnh.param("record_hz", rc.hz, rc.hz);
+            pnh.param("record_topics", rc.publish, rc.publish);
+            std::string dir;
+            pnh.param("record_dir", dir, std::string(std::getenv("HOME") ? std::getenv("HOME") : ".") +
+                                             "/mini_pi_records");
+            char stamp[32];
+            const std::time_t now = std::time(nullptr);
+            std::strftime(stamp, sizeof(stamp), "%Y%m%d_%H%M%S", std::localtime(&now));
+            rc.csv_path = dir + "/rec_" + stamp + (dry_run ? "_dry" : "_live") + ".csv";
+            recorder = std::make_unique<DataRecorder>(rc, ctx, *fsm, mapper->jointNames());
+            std::string err;
+            if (!recorder->start(nh, err))
+            {
+                ROS_ERROR("DataRecorder not started: %s", err.c_str());
+                recorder.reset();
+            }
+        }
+    }
+
     // Diagnostics only -- throttled well below control frequency.
     ros::Rate debug_rate(debug_hz > 0.0 ? debug_hz : 1.0);
     while (ros::ok())
@@ -521,8 +574,9 @@ int runDeployNode(int argc, char** argv, const RobotApp& app)
     // also ends CtrlFSM::run_(), so the FSM thread is already winding down.
     // The last thing the robot is told before the bus goes quiet is the SDK's
     // own damping reflex.
+    if (recorder) recorder->stop();   // flushes the CSV
     fsm->stop();           // joins the control thread; no state runs after this
-    policy->stop();        // joins the policy thread
+    for (auto& kv : ctx.policies) kv.second->stop();   // joins the policy threads
     hardware->protect();   // kp = 0, kd = 1 damping hold; suppressed when dry_run
     spinner.stop();
     return 0;

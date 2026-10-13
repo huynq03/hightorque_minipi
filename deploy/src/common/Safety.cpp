@@ -258,7 +258,8 @@ SafetyReport Safety::checkState(const RobotState& state, HardwareStatus hw) cons
         }
     }
 
-    if (cfg_.enable_orientation && state.imu_valid)
+    if (cfg_.enable_orientation && state.imu_valid &&
+        !tilt_tolerated_.load(std::memory_order_relaxed))
     {
         const double tilt = std::max(std::abs(state.rpy[0]), std::abs(state.rpy[1]));
         if (tilt > cfg_.max_tilt_rad)
@@ -470,7 +471,7 @@ bool Safety::publish(RobotCommand& cmd, ControlContext& ctx)
             // standing biped means it falls, whereas the SDK's own reflexes --
             // HtdwMotor::protectMotor() (kp=0, kd=1) and robot::motor_send_2()'s
             // IMU tilt fallback -- both damp.
-            ctx.policy->stop();   // a no-op when the thread is not running
+            for (auto& kv : ctx.policies) kv.second->stop();   // no-op when not running
             if (cfg_.fault_response.hard_stop)
             {
                 ROS_WARN("Safety: hard_stop enabled -- issuing the firmware "

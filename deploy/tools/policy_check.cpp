@@ -1,8 +1,10 @@
 // policy_check -- resolve and fully load one policy package, then print what
 // the controller would run. Exit 0 when the package is usable, 1 otherwise.
 //
-//   policy_check <deploy/robots/<robot>/config dir> [policy_version]
+//   policy_check <deploy/robots/<robot>/config dir> [policy_version] [state]
 //
+// `state` checks the runner of another RLBase state (e.g. Recovery), whose
+// package comes from FSM.<state>.policy_dir / policy_version.
 // It runs the controller's own RLPolicyRunner::initialize() (package resolver,
 // sim-only lock, env build, model load and shape checks, operator
 // envelope), so a launcher can fail BEFORE starting roscore and MuJoCo with
@@ -23,13 +25,15 @@ using namespace deploy;
 
 int main(int argc, char** argv)
 {
-    if (argc < 2 || argc > 3)
+    if (argc < 2 || argc > 4)
     {
-        std::fprintf(stderr, "usage: %s <deploy/robots/<robot>/config dir> [policy_version]\n", argv[0]);
+        std::fprintf(stderr, "usage: %s <deploy/robots/<robot>/config dir> [policy_version] [state]\n",
+                     argv[0]);
         return 2;
     }
     const std::string cfg = argv[1];
-    const std::string version = argc == 3 ? argv[2] : std::string();
+    const std::string version = argc >= 3 ? argv[2] : std::string();
+    const std::string state = argc == 4 ? argv[3] : std::string();
 
     JointMapper mapper;
     if (!mapper.loadFromYaml(cfg + "/mapping.yaml"))
@@ -50,6 +54,8 @@ int main(int argc, char** argv)
     opt.backend = "sim";
     opt.backend_is_simulation = true;
     opt.version_override = version;
+    opt.state = state;
+    if (!state.empty() && !version.empty()) opt.fsm[state]["policy_version"] = version;
 
     RLPolicyRunner runner;
     runner.initialize(cfg + "/policy.yaml", opt);

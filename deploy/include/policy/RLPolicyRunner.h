@@ -116,6 +116,14 @@ struct PolicyOutput
     /// valid/stamp/seq are set by the FSM thread (FSMState::stampValid).
     RobotCommand cmd{};
 
+    /// Relative action: the FSM commands q_measured + delta every tick
+    /// (delta in ROBOT order); cmd.q is then only the target at sample time.
+    bool relative = false;
+    JointArray delta{};
+    /// Relative only: the commanded target is clamped to [q_lo, q_hi] (robot
+    /// order, robot coordinates); +-inf where the package sets no clip.
+    JointArray q_lo{}, q_hi{};
+
     TimePoint stamp{};       ///< when the policy thread produced it
     std::uint64_t seq = 0;
     bool valid = false;
@@ -165,6 +173,10 @@ public:
     {
         /// The whole fsm.yaml `FSM` node; policy_dir is FSM.<state>.policy_dir.
         YAML::Node fsm;
+        /// The RLBase state this runner serves; empty = policy.yaml `state`
+        /// (the primary). A secondary state takes its version from
+        /// FSM.<state>.policy_version, and the launch overrides do not apply.
+        std::string state;
         /// What a relative policy_dir resolves against (package share dir).
         std::string base_dir;
         /// mapping.yaml joint_names, i.e. ROBOT joint order.
@@ -236,6 +248,8 @@ public:
     PolicyTiming timing() const;
 
     const PolicyPackage& package() const { return package_; }
+    /// The RLBase state this runner serves (set by initialize()).
+    const std::string& stateName() const { return state_name_; }
     const OperatorEnvelope& operatorEnvelope() const { return envelope_; }
     /// The newest frame sliced into named terms (status log).
     std::string describeFrame(const std::vector<float>& frame) const;
@@ -250,6 +264,7 @@ private:
     std::string reason_ = "POLICY_NOT_CONFIGURED";
 
     PolicyPackage package_;
+    std::string state_name_;
     std::unique_ptr<isaaclab::ManagerBasedRLEnv> env_;
     RobotArticulation* robot_ = nullptr;   ///< env_->robot, as built by buildEnv()
     JointArray kp_{}, kd_{};   ///< robot order, from the env's gains

@@ -75,6 +75,12 @@ public:
     virtual bool readyForRL() const { return true; }
     /// Operator-facing explanation used when readyForRL() is false.
     virtual std::string notReadyForRLReason() const { return {}; }
+    /// Why this state must not be entered right now (checked by CtrlFSM on the
+    /// TARGET state before a transition), empty when it may.
+    virtual std::string entryRefusal() const { return {}; }
+    /// True when Safety's tilt check is suspended while this state runs
+    /// (fsm.yaml `FSM.<name>.tolerate_tilt`).
+    virtual bool tolerateTilt() const { return false; }
 
 protected:
     ControlContext* ctx_ = nullptr;

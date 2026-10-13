@@ -22,6 +22,8 @@
 
 #include "FSM/FSMState.h"
 
+#include <cmath>
+
 namespace deploy
 {
 
@@ -33,8 +35,12 @@ public:
     void enter() override;
     void run() override;
     void exit() override;
+    std::string entryRefusal() const override;
 
 private:
+    /// This state's runner (ControlContext::policyFor(name)).
+    RLPolicyRunner* policy_ = nullptr;
+
     /// Damping applied while refusing or bailing out. NOT an RL gain.
     JointArray bail_kd_{};
 
@@ -52,6 +58,25 @@ private:
     static constexpr double kDefaultFirstOutputS = 0.5;
     double first_output_timeout_s_ = kDefaultFirstOutputS;
     TimePoint entered_at_{};
+
+    /// Optional fsm.yaml blocks (all off when absent):
+    ///   entry:   {max_gyro, max_joint_speed}  refuse entry unless the robot is still
+    ///   guard:   {max_excursion, max_joint_speed}  bail when a MEASURED joint leaves
+    ///            the package's target clip by more than max_excursion, or spins faster
+    ///   episode: {timeout_s, upright_gravity_z, settle_gyro, settle_joint_speed,
+    ///             hold_s, on_success}  success = upright and still for hold_s ->
+    ///            on_success; no success within timeout_s -> Passive
+    struct Limits
+    {
+        double entry_gyro = INFINITY, entry_dq = INFINITY;
+        double guard_excursion = INFINITY, guard_dq = INFINITY;
+        double timeout_s = INFINITY, upright_gz = -INFINITY;
+        double settle_gyro = 0.3, settle_dq = 0.5, hold_s = 0.5;
+        int on_success = 0;   ///< FSM id, 0 = none
+    } lim_;
+    TimePoint settled_since_{};
+    bool settled_ = false;
+    bool success_ = false;
 
     /// Set whenever RL cannot continue; drives the guard back to Passive.
     bool bail_ = false;

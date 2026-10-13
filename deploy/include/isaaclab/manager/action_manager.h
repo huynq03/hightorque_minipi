@@ -12,6 +12,8 @@
 
 #include <yaml-cpp/yaml.h>
 
+#include <array>
+#include <cmath>
 #include <functional>
 #include <map>
 #include <memory>
@@ -35,6 +37,15 @@ public:
     virtual const std::vector<float>& raw_actions() const = 0;
     virtual const std::vector<float>& processed_actions() const = 0;
     virtual void process_actions(const std::vector<float>& actions) = 0;
+    /// True when processed_actions() are deltas on the measured joint position
+    /// (target = q + processed), re-based by the robot at its own rate.
+    virtual bool relative() const { return false; }
+    /// Per-joint [lo, hi] bound on the target, or empty for none.
+    virtual const std::vector<std::vector<float>>& target_clip() const
+    {
+        static const std::vector<std::vector<float>> none;
+        return none;
+    }
     virtual void reset() {}
     virtual std::string describe() const { return {}; }
 
@@ -82,6 +93,9 @@ public:
                                          "' is not registered. Known:" + known);
             }
             terms_.push_back(f->second(it->second, env));
+            if (terms_.back()->relative() != terms_.front()->relative())
+                throw std::runtime_error("deploy.yaml: relative and absolute action terms "
+                                         "cannot be mixed");
         }
         reset();
     }
@@ -96,6 +110,21 @@ public:
     const std::vector<float>& action() const { return action_; }
     /// The targets, policy order.
     const std::vector<float>& processed_actions() const { return processed_; }
+    /// processed_actions() are deltas on the measured q (see ActionTerm).
+    bool relative() const { return !terms_.empty() && terms_.front()->relative(); }
+    /// [lo, hi] per action value, +-inf where a term has no target clip.
+    std::vector<std::array<float, 2>> target_clip() const
+    {
+        std::vector<std::array<float, 2>> out;
+        for (const auto& t : terms_)
+            for (int i = 0; i < t->action_dim(); ++i)
+            {
+                const auto& c = t->target_clip();
+                out.push_back(c.empty() ? std::array<float, 2>{-INFINITY, INFINITY}
+                                        : std::array<float, 2>{c[i][0], c[i][1]});
+            }
+        return out;
+    }
 
     /// Throws if `action` does not have total_action_dim() values.
     void process_action(const std::vector<float>& action)

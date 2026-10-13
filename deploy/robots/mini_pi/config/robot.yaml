@@ -184,6 +184,7 @@ keyboard:
     passive: "1"
     stand: "2"
     rl: "3"
+    recover: "4"     # Passive -> Recovery (get-up policy), gamepad LB + X
     reset: "0"       # clear a latched safety fault (same as RB+Y)
 
 # Feedback freshness thresholds are NOT here: they live in config/safety.yaml

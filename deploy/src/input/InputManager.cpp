@@ -8,7 +8,7 @@ namespace deploy
 {
 namespace
 {
-constexpr int kPassive = 0, kStand = 1, kRL = 2, kReset = 3;
+constexpr int kPassive = 0, kStand = 1, kRL = 2, kReset = 3, kRecover = 4;
 }
 
 bool InputManager::initialize(ros::NodeHandle& nh, const Config& cfg)
@@ -25,13 +25,13 @@ bool InputManager::initialize(ros::NodeHandle& nh, const Config& cfg)
         {
             ROS_INFO("InputManager: keyboard ENABLED on this terminal. "
                      "%s/%s/%s/%s move, %s/%s yaw, %s stop | "
-                     "%s Passive, %s FixStand, %s RL, %s reset fault.",
+                     "%s Passive, %s FixStand, %s RL, %s Recovery, %s reset fault.",
                      cfg_.key_forward.c_str(), cfg_.key_backward.c_str(),
                      cfg_.key_left.c_str(), cfg_.key_right.c_str(),
                      cfg_.key_yaw_left.c_str(), cfg_.key_yaw_right.c_str(),
                      cfg_.key_stop.c_str(), cfg_.key_passive.c_str(),
                      cfg_.key_stand.c_str(), cfg_.key_rl.c_str(),
-                     cfg_.key_reset.c_str());
+                     cfg_.key_recover.c_str(), cfg_.key_reset.c_str());
         }
         else
         {
@@ -65,6 +65,7 @@ void InputManager::feedKey(const std::string& key)
     if (key == cfg_.key_stand)   { accepted("request FixStand"); combo_edge_[kStand]   = true; return; }
     if (key == cfg_.key_rl)      { accepted("request RL");       combo_edge_[kRL]      = true; return; }
     if (key == cfg_.key_reset)   { accepted("request fault reset"); combo_edge_[kReset] = true; return; }
+    if (key == cfg_.key_recover) { accepted("request Recovery"); combo_edge_[kRecover] = true; return; }
 
     // Locomotion. Each key sets one axis and leaves the others latched, so
     // forward-then-yaw gives an arc, as it does with teleop_twist_keyboard.
@@ -158,13 +159,14 @@ void InputManager::latchEdge(int combo, bool now)
 
 void InputManager::update()
 {
-    std::array<bool, 4> now{};
+    std::array<bool, 5> now{};
     {
         std::lock_guard<std::mutex> lk(mutex_);
         now[kPassive] = button(cfg_.btn_lb) && button(cfg_.btn_b);
         now[kStand]   = button(cfg_.btn_lb) && button(cfg_.btn_a);
         now[kRL]      = button(cfg_.btn_rb) && button(cfg_.btn_a);
         now[kReset]   = button(cfg_.btn_rb) && button(cfg_.btn_y);
+        now[kRecover] = button(cfg_.btn_lb) && button(cfg_.btn_x);
     }
     for (std::size_t i = 0; i < now.size(); ++i) latchEdge(static_cast<int>(i), now[i]);
 
@@ -177,6 +179,7 @@ bool InputManager::requestPassive() { bool e = combo_edge_[kPassive]; combo_edge
 bool InputManager::requestStand()   { bool e = combo_edge_[kStand];   combo_edge_[kStand]   = false; return e; }
 bool InputManager::requestRL()      { bool e = combo_edge_[kRL];      combo_edge_[kRL]      = false; return e; }
 bool InputManager::requestReset()   { bool e = combo_edge_[kReset];   combo_edge_[kReset]   = false; return e; }
+bool InputManager::requestRecover() { bool e = combo_edge_[kRecover]; combo_edge_[kRecover] = false; return e; }
 
 VelocityCommand InputManager::velocityCommand() const
 {
@@ -217,14 +220,14 @@ std::string InputManager::describe() const
 {
     char buf[768];
     std::snprintf(buf, sizeof(buf),
-                  "InputManager: LB+A=FixStand  RB+A=RL  LB+B=Passive  RB+Y=reset fault\n"
-                  "InputManager: keyboard %s -- %s=FixStand %s=RL %s=Passive %s=reset | "
+                  "InputManager: LB+A=FixStand  RB+A=RL  LB+X=Recovery  LB+B=Passive  RB+Y=reset fault\n"
+                  "InputManager: keyboard %s -- %s=FixStand %s=RL %s=Recovery %s=Passive %s=reset | "
                   "%s fwd %s back %s/%s strafe %s/%s yaw %s stop (%.2f m/s, %.2f rad/s)\n"
                   "InputManager: axes vx=%d vy=%d yaw=%d  deadzone=%.3f  "
                   "ranges vx[%.2f,%.2f] vy[%.2f,%.2f] yaw[%.2f,%.2f]  "
                   "(priority: joy off-centre > keyboard non-zero > cmd_vel > zero)",
                   keyboard_.running() ? "ON" : "off",
-                  cfg_.key_stand.c_str(), cfg_.key_rl.c_str(),
+                  cfg_.key_stand.c_str(), cfg_.key_rl.c_str(), cfg_.key_recover.c_str(),
                   cfg_.key_passive.c_str(), cfg_.key_reset.c_str(),
                   cfg_.key_forward.c_str(), cfg_.key_backward.c_str(),
                   cfg_.key_left.c_str(), cfg_.key_right.c_str(),

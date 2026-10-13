@@ -47,6 +47,13 @@
        ====================================================================== -->
   <arg name="policy_dir"     default=""/>
   <arg name="policy_version" default=""/>
+  <!-- High-rate log: CSV in record_dir (rec_<time>_live|dry.csv) and, with
+       record_topics, /mini_pi/joint_states + /mini_pi/joint_command for
+       rqt_plot / PlotJuggler / rosbag. Off by default. -->
+  <arg name="record"        default="false"/>
+  <arg name="record_hz"     default="200.0"/>
+  <arg name="record_dir"    default="$(env HOME)/mini_pi_records"/>
+  <arg name="record_topics" default="true"/>
   <arg name="test_policy"    default="false"/>
 
   <!-- dry_run guards the physical motors. It has nothing to guard in
@@ -117,6 +124,10 @@
     <param name="policy_config"  value="$(find mini_pi_fsm)/config/policy.yaml"/>
     <param name="policy_dir"     type="string" value="$(arg policy_dir)"/>
     <param name="policy_version" type="string" value="$(arg policy_version)"/>
+    <param name="record"         type="bool"   value="$(arg record)"/>
+    <param name="record_hz"      type="double" value="$(arg record_hz)"/>
+    <param name="record_dir"     type="string" value="$(arg record_dir)"/>
+    <param name="record_topics"  type="bool"   value="$(arg record_topics)"/>
     <!-- Structurally cannot be true unless the backend is the simulator. -->
     <param name="test_policy"    type="bool"
            value="$(eval arg('test_policy') and arg('backend') == 'sim')"/>

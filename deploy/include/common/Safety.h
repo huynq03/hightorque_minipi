@@ -174,6 +174,10 @@ public:
 
     /// Called exactly once, by main(), after startup readiness has succeeded.
     void arm();
+
+    /// Suspends the tilt check (BadOrientation) while true. Set every cycle by
+    /// CtrlFSM from the current state's fsm.yaml `tolerate_tilt`.
+    void setTiltTolerated(bool v) { tilt_tolerated_.store(v, std::memory_order_relaxed); }
     bool armed() const { return armed_.load(std::memory_order_acquire); }
 
     /// Latch a critical fault. The FIRST report wins, so the diagnostic names
@@ -210,6 +214,7 @@ private:
 
     std::atomic<bool> armed_{false};
     std::atomic<bool> faulted_{false};
+    std::atomic<bool> tilt_tolerated_{false};
     std::atomic<std::uint64_t> last_clamp_mask_{0};
     std::atomic<std::uint64_t> clamped_commands_{0};
 

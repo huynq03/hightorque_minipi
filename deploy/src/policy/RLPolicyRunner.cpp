@@ -222,23 +222,28 @@ bool RLPolicyRunner::initialize(const std::string& policy_yaml, const Options& o
     catch (const YAML::Exception& e) { return refuse("cannot read " + policy_yaml + ": " + e.what()); }
 
     const YAML::Node p = root["policy"];
-    const std::string state_name = (p && p["state"]) ? p["state"].as<std::string>() : "Velocity";
-    std::string version = (p && p["version"]) ? p["version"].as<std::string>() : std::string();
-    if (!opt.version_override.empty()) version = opt.version_override;
+    const std::string primary = (p && p["state"]) ? p["state"].as<std::string>() : "Velocity";
+    const std::string state_name = opt.state.empty() ? primary : opt.state;
+    const bool is_primary = state_name == primary;
+    state_name_ = state_name;
+    const YAML::Node st = opt.fsm ? opt.fsm[state_name] : YAML::Node();
+    std::string version;
+    if (st && st["policy_version"]) version = st["policy_version"].as<std::string>();
+    else if (is_primary && p && p["version"]) version = p["version"].as<std::string>();
+    if (is_primary && !opt.version_override.empty()) version = opt.version_override;
     const bool allow_test = opt.allow_test_policy_override ||
                             (p && p["allow_test_policy"] && p["allow_test_policy"].as<bool>());
 
     std::string policy_dir;
-    if (p && p["policy_dir"]) policy_dir = p["policy_dir"].as<std::string>();
-    if (opt.fsm && opt.fsm[state_name] && opt.fsm[state_name]["policy_dir"])
-        policy_dir = opt.fsm[state_name]["policy_dir"].as<std::string>();
-    if (!opt.policy_dir_override.empty()) policy_dir = opt.policy_dir_override;
+    if (is_primary && p && p["policy_dir"]) policy_dir = p["policy_dir"].as<std::string>();
+    if (st && st["policy_dir"]) policy_dir = st["policy_dir"].as<std::string>();
+    if (is_primary && !opt.policy_dir_override.empty()) policy_dir = opt.policy_dir_override;
     if (policy_dir.empty()) return refuse("no policy_dir: set FSM." + state_name + ".policy_dir in fsm.yaml");
 
     package_ = resolvePolicyPackage(policy_dir, opt.base_dir, version);
     if (!package_.valid) return refuse(package_.error);
-    ROS_INFO("RLPolicyRunner: selected policy package '%s' (version '%s')", package_.dir.c_str(),
-             package_.version.c_str());
+    ROS_INFO("RLPolicyRunner: state %s selected policy package '%s' (version '%s')",
+             state_name.c_str(), package_.dir.c_str(), package_.version.c_str());
 
     YAML::Node deploy;
     try { deploy = YAML::LoadFile(package_.deploy_yaml); }
@@ -389,13 +394,39 @@ void RLPolicyRunner::threadBody_()
             return;
         }
 
-        robot_->to_robot(env_->action_manager->processed_actions(), out.cmd.q);
+        const auto& processed = env_->action_manager->processed_actions();
+        out.relative = env_->action_manager->relative();
+        if (out.relative)
+        {
+            // A joint delta: robot order, no calibration shift. cmd.q is the
+            // target at sample time; State_RLBase re-bases it every tick.
+            const auto& m = robot_->data.joint_ids_map;
+            const auto& shift = robot_->data.joint_pos_shift;
+            const auto clip = env_->action_manager->target_clip();
+            out.delta.fill(0.0);
+            out.q_lo.fill(-std::numeric_limits<double>::infinity());
+            out.q_hi.fill(std::numeric_limits<double>::infinity());
+            for (std::size_t i = 0; i < m.size(); ++i)
+            {
+                const auto r = static_cast<std::size_t>(m[i]);
+                out.delta[r] = processed[i];
+                out.q_lo[r] = static_cast<double>(clip[i][0]) - shift[i];
+                out.q_hi[r] = static_cast<double>(clip[i][1]) - shift[i];
+            }
+            for (std::size_t i = 0; i < out.cmd.q.size(); ++i)
+                out.cmd.q[i] = std::clamp(robot_->state.robot_q[i] + out.delta[i],
+                                          out.q_lo[i], out.q_hi[i]);
+        }
+        else
+        {
+            robot_->to_robot(processed, out.cmd.q);
+        }
         out.cmd.kp = kp_;
         out.cmd.kd = kd_;
         out.cmd.dq.fill(0.0);
         out.cmd.torque.fill(0.0);
         // Policy-independent backstop: a non-finite target never leaves here.
-        if (!is_finite(out.cmd.q))
+        if (!is_finite(out.cmd.q) || !is_finite(out.delta))
         {
             fail_("the policy produced a non-finite joint target");
             return;

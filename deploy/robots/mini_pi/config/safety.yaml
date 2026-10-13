@@ -5,8 +5,8 @@
 #    max_tilt_rad 1.0            HighTorque imu_limt_num (their check is off)
 #    fault_response.kd 1.0      == HtdwMotor::protectMotor()
 #    finite checks, command timeout, motor/IMU timeouts: implemented + tested
+#    q_lower / q_upper           measured mechanical stops (hand sweep 2026-10-13)
 #  PLACEHOLDER -- REQUIRES HARDWARE MEASUREMENT (do not trust for RL actuation)
-#    q_lower / q_upper +-3.14    catches gross mapping errors only
 #    motor_timeout_s 0.1         SDK's own 0.1 s; real jitter not measured
 #    imu_timeout_s 0.2           yesense publish rate not measured
 #  DISABLED -- no verified value exists anywhere
@@ -68,17 +68,16 @@ enable_torque_limit: false
 max_tilt_rad: 1.0
 
 # --- joint position envelope (ROBOT ORDER, ROBOT SPACE) ---------------------
-# ⚠ These ±3.14 values are NOT a re-indexed copy of pi_pd_config.yaml's
-# `lower`/`upper`. They are an independent, deliberately permissive bound whose
-# only job today is to catch a gross mapping error. They are wide enough to be
-# nearly inert.
-#
-# REQUIRES HARDWARE TEST: replace with measured per-joint ranges before any
-# physical RL run (doc/deployment.md).
-q_lower: [-3.14, -3.14, -3.14, -3.14, -3.14, -3.14,
-          -3.14, -3.14, -3.14, -3.14, -3.14, -3.14]
-q_upper: [ 3.14,  3.14,  3.14,  3.14,  3.14,  3.14,
-           3.14,  3.14,  3.14,  3.14,  3.14,  3.14]
+# NOT a re-indexed copy of pi_pd_config.yaml's `lower`/`upper` (motor order,
+# motor space).
+# MEASURED 2026-10-13: hand sweep to the mechanical stops in two dry runs
+# (19:50, 20:00), both legs symmetric, repeatable. Every commanded target, in
+# every state, is clamped into this range (Safety::clampCommand). Order:
+#   hip_pitch hip_roll thigh calf ankle_pitch ankle_roll  (left, then right)
+q_lower: [-2.34, -0.18, -2.50, -2.92, -0.50, -0.75,
+          -2.33, -2.76, -2.53, -2.93, -0.48, -0.78]
+q_upper: [ 2.88,  2.77,  2.90,  1.45,  1.45,  0.81,
+           2.90,  0.23,  2.88,  1.44,  1.48,  0.79]
 
 # --- velocity limit ---------------------------------------------------------
 # UNKNOWN: no Mini-Pi config declares a per-joint velocity limit anywhere.

@@ -1,0 +1,73 @@
+# Mini-Pi fall-recovery (get-up) actor -- a config-only policy package, run by
+# the Recovery FSM state (fsm.yaml FSM.Recovery).
+#
+# Model (copied, never modified; md5 ffcc3285c71af08b40088fa33b187df2):
+#   model_2600.onnx, minipi_getup_host (HoST-style env, src/minipi_getup/host/env.py)
+#   input 'observations' float32 [1, 258] -> output 'actions' float32 [1, 12]
+#   final tanh: actions in [-1, 1]. No metadata in the graph.
+# Training asset: pi_extend_joint_limit.xml (simulate: model/scene_mini_pi_recovery.xml).
+
+# 50 Hz policy; the trainer's controller re-bases the target every 5 ms.
+step_dt: 0.02
+
+# POLICY order: right leg first. Resolved by name against mapping.yaml.
+joint_names: [
+  "r_hip_pitch_joint", "r_hip_roll_joint", "r_thigh_joint",
+  "r_calf_joint", "r_ankle_pitch_joint", "r_ankle_roll_joint",
+  "l_hip_pitch_joint", "l_hip_roll_joint", "l_thigh_joint",
+  "l_calf_joint", "l_ankle_pitch_joint", "l_ankle_roll_joint"]
+
+# Unused by the relative action and by joint_pos (absolute, no default pose).
+default_joint_pos: 0.0
+
+# Training nominal gains (minipi_getup_host logs/host_staged_recovery/
+# 20261013_162942_rev13_floor025_from1800/config.json), applied by the Python
+# controller, not XML actuators; training also randomizes them. Policy order.
+#            hip_pitch hip_roll thigh calf ankle_pitch ankle_roll
+stiffness: [60.0, 40.0, 20.0, 60.0, 30.0, 10.0,
+            60.0, 40.0, 20.0, 60.0, 30.0, 10.0]
+damping:   [2.4, 0.8, 0.4, 2.8, 1.6, 0.3,
+            2.4, 0.8, 0.4, 2.8, 1.6, 0.3]
+
+# No velocity command: the envelope is zero.
+commands:
+  base_velocity:
+    ranges:
+      lin_vel_x: [0.0, 0.0]
+      lin_vel_y: [0.0, 0.0]
+      ang_vel_z: [0.0, 0.0]
+
+# One frame = 43 values; the input is 6 frames, oldest first (frame-major),
+# the whole vector clipped to +-100 after scaling.
+observations:
+  observations:
+    scale_first: true
+    use_gym_history: true
+    # Training: settle zeroes every new frame for 0.6 s, so the policy starts on
+    # an all-zero history (the robot lies still in Passive before `recover`).
+    history_init: zero
+    base_ang_vel:      {scale: 0.25, clip: [-100.0, 100.0], history_length: 6}
+    projected_gravity: {clip: [-100.0, 100.0], history_length: 6}
+    joint_pos:         {clip: [-100.0, 100.0], history_length: 6}   # absolute q
+    joint_vel:         {scale: 0.05, clip: [-100.0, 100.0], history_length: 6}
+    last_action:       {clip: [-100.0, 100.0], history_length: 6}   # raw tanh output
+    constant:          {params: {value: [0.25]}, clip: [-100.0, 100.0], history_length: 6}  # action scale
+
+# q_target = clip(q_measured + 0.25 * a), re-based on the measured q every FSM
+# tick. The clip is the training XML's joint ranges (pi_extend_joint_limit.xml):
+# the policy leans on those limits (both thighs held at +-0.3), which MuJoCo
+# enforced in training but the robot does not -- unclipped, the real hip yaws
+# spun to +-2.9 rad (2026-10-13). Where a training limit lies beyond the robot's
+# measured stop (calf 1.65 vs ~1.44), safety.yaml q_lower/q_upper clamps the
+# target to the stop. Do NOT shrink this clip below the training limits: the
+# policy pushes the knees to their limit to rise from prone (sim with the
+# measured stops: 8/8 prone get-ups with this clip, 2/8 with calf <= 1.40).
+# Policy order.
+actions:
+  RelativeJointPositionAction:
+    scale: 0.25
+    clip: [[-1.25, 1.75], [-2.0944, 0.12], [-0.28, 0.30], [-2.5, 1.65], [-0.5, 1.3], [-0.3, 0.8],
+           [-1.25, 1.75], [-0.12, 2.0944], [-0.30, 0.28], [-2.5, 1.65], [-0.5, 1.3], [-0.8, 0.3]]
+
+operator:
+  keyboard: {linear_step: 0.1, yaw_step: 0.1}   # required by the runtime; no command is observed

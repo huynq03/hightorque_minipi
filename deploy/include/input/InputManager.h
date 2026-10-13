@@ -101,6 +101,7 @@ public:
         std::string key_passive = "1";
         std::string key_stand   = "2";
         std::string key_rl      = "3";
+        std::string key_recover = "4";
         std::string key_reset   = "0";
     };
 
@@ -126,6 +127,11 @@ public:
     bool requestStand();      ///< LB + A
     bool requestRL();         ///< RB + A
     bool requestReset();      ///< RB + Y  (clears a latched fault)
+    bool requestRecover();    ///< LB + X  (fall recovery)
+    /// Drops every request not consumed in the previous cycle. CtrlFSM calls it
+    /// before update(), so a press counts only in the cycle it arrives: a press
+    /// the current state ignores cannot fire later in another state.
+    void clearRequests() { combo_edge_.fill(false); }
 
     /// The operator's velocity intent, from whichever source owns it.
     ///
@@ -193,8 +199,8 @@ private:
     std::string last_key_;           ///< for edge detection, update() only
 
     // latched-edge state, only touched from update()/request*()
-    std::array<bool, 4> combo_prev_{};
-    std::array<bool, 4> combo_edge_{};
+    std::array<bool, 5> combo_prev_{};
+    std::array<bool, 5> combo_edge_{};
 };
 
 } // namespace deploy

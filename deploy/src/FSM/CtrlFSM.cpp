@@ -122,6 +122,7 @@ void CtrlFSM::run_()
 void CtrlFSM::refreshState_()
 {
     ctx_->readState();
+    if (currentState_) ctx_->safety->setTiltTolerated(currentState_->tolerateTilt());
 
     // Detection, then Safety::raise() latches it. Safety ignores everything
     // until main() arms it, which is what keeps "no motor packet yet" during
@@ -146,6 +147,7 @@ void CtrlFSM::tick_()
     refreshState_();
 
     ctx_->command->reset();
+    ctx_->input->clearRequests();
     currentState_->pre_run();   // refreshes InputManager's edges for this cycle
     serviceFaultReset_();
     currentState_->run();
@@ -172,12 +174,14 @@ void CtrlFSM::tick_()
         // excursion into a state that cannot command anything.
         if (rl_state_ids_.count(next_id))
         {
+            RLPolicyRunner* policy = ctx_->policyFor(FSMStateRegistry::instance().name(next_id));
             std::string refusal;
-            if (!ctx_->policy->ready())        refusal = ctx_->policy->unavailableReason();
+            if (!policy)                       refusal = "no policy runner";
+            else if (!policy->ready())         refusal = policy->unavailableReason();
             else if (ctx_->safety->faulted())  refusal = "a safety fault is latched";
             else if (!currentState_->readyForRL())
                                                refusal = currentState_->notReadyForRLReason();
-            else                               refusal = ctx_->policy->entryBlocker(*ctx_->state);
+            else                               refusal = policy->entryBlocker(*ctx_->state);
 
             if (!refusal.empty())
             {
@@ -195,6 +199,14 @@ void CtrlFSM::tick_()
         {
             if (state->isState(next_id))
             {
+                if (const std::string why = state->entryRefusal(); !why.empty())
+                {
+                    ROS_ERROR_THROTTLE(2.0, "FSM: refusing transition %s -> %s: %s. Staying in %s.",
+                                       currentState_->getStateString().c_str(),
+                                       state->getStateString().c_str(), why.c_str(),
+                                       currentState_->getStateString().c_str());
+                    return;
+                }
                 ROS_INFO("FSM: Change state from %s to %s",
                          currentState_->getStateString().c_str(),
                          state->getStateString().c_str());

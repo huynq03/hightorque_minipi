@@ -29,6 +29,8 @@ public:
     /// transmits it -- or overrides it while a runtime fault is latched.
     void post_run() override;
 
+    bool tolerateTilt() const override { return tolerate_tilt_; }
+
 protected:
     /// Damping-only: kp = 0, per-joint kd, target = measured q, dq = tau = 0.
     /// This is the safe fallback every state uses; it is the same shape as
@@ -45,6 +47,8 @@ protected:
 
     /// Per-state config node (`FSM.<name>` in fsm.yaml). May be undefined.
     YAML::Node cfg_;
+
+    bool tolerate_tilt_ = false;
 
 private:
     void registerTransitions();
