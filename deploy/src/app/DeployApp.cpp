@@ -20,7 +20,6 @@
 
 #include <algorithm>
 #include <cstdio>
-#include <cstdlib>
 #include <ctime>
 #include <iostream>
 #include <cmath>
@@ -116,7 +115,7 @@ std::string diagnostics(const ControlContext& ctx, const CtrlFSM& fsm)
         {
             const auto action_bounds = std::minmax_element(t.action.begin(),
                                                             t.action.end());
-            const auto target_bounds = std::minmax_element(t.cmd.q.begin(), t.cmd.q.end());
+            const auto target_bounds = std::minmax_element(c.q.begin(), c.q.end());
             os << "\npolicy sample    : obs=[" << t.observation_min << ","
                << t.observation_max << "] finite=" << (t.observation_finite ? "yes" : "NO")
                << " action=[" << *action_bounds.first << ","
@@ -129,7 +128,7 @@ std::string diagnostics(const ControlContext& ctx, const CtrlFSM& fsm)
             os << "\n  action (policy order)  :";
             for (double v : t.action) os << " " << v;
             os << "\n  q_target (robot order) :";
-            for (double v : t.cmd.q) os << " " << v;
+            for (double v : c.q) os << " " << v;
         }
     }
     else
@@ -394,8 +393,7 @@ int runDeployNode(int argc, char** argv, const RobotApp& app)
     // model. A missing policy is NOT a startup failure: RLPolicyRunner reports
     // POLICY_NOT_CONFIGURED, CtrlFSM refuses every transition into an RLBase
     // state, and the non-RL flow is unaffected.
-    auto policy = std::make_unique<RLPolicyRunner>();
-    std::vector<std::unique_ptr<RLPolicyRunner>> extra_policies;
+    std::vector<std::unique_ptr<RLPolicyRunner>> runners;   // [0] = policy.yaml's state
     {
         RLPolicyRunner::Options po;
         po.fsm = fsm_config::node["FSM"];
@@ -417,24 +415,24 @@ int runDeployNode(int argc, char** argv, const RobotApp& app)
         pnh.param("test_policy", po.allow_test_policy_override,
                   po.allow_test_policy_override);
 
-        if (!policy->initialize(policy_yaml, po)) return 1;
-
-        // Every other RLBase state gets its own runner and package
-        // (FSM.<state>.policy_dir / policy_version); the overrides above stay
-        // with the primary state.
+        // policy.yaml's state first, with the launch overrides; then every other
+        // RLBase state from its own FSM.<state>.policy_dir / policy_version.
+        runners.push_back(std::make_unique<RLPolicyRunner>());
+        if (!runners[0]->initialize(policy_yaml, po)) return 1;
+        po.policy_dir_override.clear();
+        po.version_override.clear();
         for (const auto& it : fsm_config::node["FSM"]["_"])
         {
             const std::string name = it.first.as<std::string>();
             const YAML::Node type = it.second["type"];
-            if (!type || type.as<std::string>() != "RLBase" || name == policy->stateName())
+            if (!type || type.as<std::string>() != "RLBase" || name == runners[0]->stateName())
                 continue;
-            RLPolicyRunner::Options so = po;
-            so.state = name;
-            auto r = std::make_unique<RLPolicyRunner>();
-            if (!r->initialize(policy_yaml, so)) return 1;
-            extra_policies.push_back(std::move(r));
+            po.state = name;
+            runners.push_back(std::make_unique<RLPolicyRunner>());
+            if (!runners.back()->initialize(policy_yaml, po)) return 1;
         }
     }
+    RLPolicyRunner* policy = runners[0].get();
 
     // ---- operator envelope from the policy -------------------------------
     // Full stick, the /cmd_vel clamp and one key press all follow the selected
@@ -470,9 +468,8 @@ int runDeployNode(int argc, char** argv, const RobotApp& app)
     ctx.mapper      = mapper.get();
     ctx.safety      = safety.get();
     ctx.input       = input.get();
-    ctx.policy      = policy.get();
-    ctx.policies[policy->stateName()] = policy.get();
-    for (const auto& r : extra_policies) ctx.policies[r->stateName()] = r.get();
+    ctx.policy      = policy;
+    for (const auto& r : runners) ctx.policies[r->stateName()] = r.get();
     ctx.state       = &state;
     ctx.command     = &command;
     ctx.state_mutex = &state_mutex;
@@ -545,9 +542,8 @@ int runDeployNode(int argc, char** argv, const RobotApp& app)
             DataRecorder::Config rc;
             pnh.param("record_hz", rc.hz, rc.hz);
             pnh.param("record_topics", rc.publish, rc.publish);
-            std::string dir;
-            pnh.param("record_dir", dir, std::string(std::getenv("HOME") ? std::getenv("HOME") : ".") +
-                                             "/mini_pi_records");
+            std::string dir = "mini_pi_records";   // the launch file passes ~/mini_pi_records
+            pnh.param("record_dir", dir, dir);
             char stamp[32];
             const std::time_t now = std::time(nullptr);
             std::strftime(stamp, sizeof(stamp), "%Y%m%d_%H%M%S", std::localtime(&now));

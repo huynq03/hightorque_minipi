@@ -118,7 +118,15 @@ public:
         std::vector<double> q_lower;
         std::vector<double> q_upper;
         std::vector<double> dq_max;
+        /// Bound on the torque the motor's PD loop will produce (not just the
+        /// feedforward term); see clampCommand().
         std::vector<double> tau_max;
+        /// safety.yaml `torque_speed_limit: [full, zero]` (rad/s): torque that
+        /// drives a joint further in the direction it already moves is
+        /// tau_max up to |dq| = full and falls linearly to 0 at |dq| = zero.
+        /// Braking torque is never reduced. zero <= 0: off.
+        double tau_speed_full = 0.0;
+        double tau_speed_zero = 0.0;
 
         /// |roll| or |pitch| beyond this is treated as a fall.
         double max_tilt_rad = 1.0;
@@ -151,17 +159,23 @@ public:
 
     /// Sensor plausibility, freshness and hardware health. Independent of any
     /// command and of any policy. Pure: raising is the caller's decision.
-    SafetyReport checkState(const RobotState& state, HardwareStatus hw) const;
+    /// `tolerate_tilt`: skip the orientation check (the state's fsm.yaml `tolerate_tilt`).
+    SafetyReport checkState(const RobotState& state, HardwareStatus hw,
+                            bool tolerate_tilt = false) const;
 
     // --- command side ------------------------------------------------------
 
     /// Checks a command before it is mapped to motor order.
     SafetyReport checkCommand(const RobotCommand& cmd) const;
 
-    /// Clamps q/dq/torque into the configured envelope, in place.
+    /// Clamps q/dq/torque into the configured envelope, in place. With the
+    /// torque limit on, q is then moved so that the motor's
+    /// kp (q - q_meas) + kd (dq - dq_meas) + torque stays within tau_max
+    /// (speed-derated, see Config::tau_speed_*), measured from `state`.
     /// Returns the number of values that had to be clamped. `mask`, when
     /// given, receives which ones (see lastClampMask()).
-    int clampCommand(RobotCommand& cmd, std::uint64_t* mask = nullptr) const;
+    int clampCommand(RobotCommand& cmd, const RobotState& state,
+                     std::uint64_t* mask = nullptr) const;
 
     /// Which values the most recent publish() had to clamp, robot joint order:
     /// bit j = q[j], bit NUM_DOF + j = dq[j], bit 2 * NUM_DOF + j = torque[j].
@@ -174,10 +188,6 @@ public:
 
     /// Called exactly once, by main(), after startup readiness has succeeded.
     void arm();
-
-    /// Suspends the tilt check (BadOrientation) while true. Set every cycle by
-    /// CtrlFSM from the current state's fsm.yaml `tolerate_tilt`.
-    void setTiltTolerated(bool v) { tilt_tolerated_.store(v, std::memory_order_relaxed); }
     bool armed() const { return armed_.load(std::memory_order_acquire); }
 
     /// Latch a critical fault. The FIRST report wins, so the diagnostic names
@@ -214,7 +224,6 @@ private:
 
     std::atomic<bool> armed_{false};
     std::atomic<bool> faulted_{false};
-    std::atomic<bool> tilt_tolerated_{false};
     std::atomic<std::uint64_t> last_clamp_mask_{0};
     std::atomic<std::uint64_t> clamped_commands_{0};
 

@@ -12,8 +12,6 @@
 
 #include <yaml-cpp/yaml.h>
 
-#include <array>
-#include <cmath>
 #include <functional>
 #include <map>
 #include <memory>
@@ -112,19 +110,8 @@ public:
     const std::vector<float>& processed_actions() const { return processed_; }
     /// processed_actions() are deltas on the measured q (see ActionTerm).
     bool relative() const { return !terms_.empty() && terms_.front()->relative(); }
-    /// [lo, hi] per action value, +-inf where a term has no target clip.
-    std::vector<std::array<float, 2>> target_clip() const
-    {
-        std::vector<std::array<float, 2>> out;
-        for (const auto& t : terms_)
-            for (int i = 0; i < t->action_dim(); ++i)
-            {
-                const auto& c = t->target_clip();
-                out.push_back(c.empty() ? std::array<float, 2>{-INFINITY, INFINITY}
-                                        : std::array<float, 2>{c[i][0], c[i][1]});
-            }
-        return out;
-    }
+    /// The first term's per-joint target clip (empty = none).
+    const std::vector<std::vector<float>>& target_clip() const { return terms_.front()->target_clip(); }
 
     /// Throws if `action` does not have total_action_dim() values.
     void process_action(const std::vector<float>& action)

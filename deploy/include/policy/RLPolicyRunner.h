@@ -116,13 +116,9 @@ struct PolicyOutput
     /// valid/stamp/seq are set by the FSM thread (FSMState::stampValid).
     RobotCommand cmd{};
 
-    /// Relative action: the FSM commands q_measured + delta every tick
-    /// (delta in ROBOT order); cmd.q is then only the target at sample time.
-    bool relative = false;
+    /// Relative action (RLPolicyRunner::relative()): the joint delta, ROBOT
+    /// order; State_RLBase commands clip(q + delta) every tick, cmd.q is unused.
     JointArray delta{};
-    /// Relative only: the commanded target is clamped to [q_lo, q_hi] (robot
-    /// order, robot coordinates); +-inf where the package sets no clip.
-    JointArray q_lo{}, q_hi{};
 
     TimePoint stamp{};       ///< when the policy thread produced it
     std::uint64_t seq = 0;
@@ -173,9 +169,9 @@ public:
     {
         /// The whole fsm.yaml `FSM` node; policy_dir is FSM.<state>.policy_dir.
         YAML::Node fsm;
-        /// The RLBase state this runner serves; empty = policy.yaml `state`
-        /// (the primary). A secondary state takes its version from
-        /// FSM.<state>.policy_version, and the launch overrides do not apply.
+        /// The RLBase state this runner serves; empty = policy.yaml `state`.
+        /// Version / dir: the overrides below, else FSM.<state>.policy_version /
+        /// policy_dir, else (policy.yaml's state only) policy.yaml.
         std::string state;
         /// What a relative policy_dir resolves against (package share dir).
         std::string base_dir;
@@ -248,6 +244,11 @@ public:
     PolicyTiming timing() const;
 
     const PolicyPackage& package() const { return package_; }
+    /// The package's action is relative (see PolicyOutput::delta).
+    bool relative() const { return relative_; }
+    /// Target clip, ROBOT order and coordinates; +-inf where the package sets none.
+    const JointArray& targetLo() const { return q_lo_; }
+    const JointArray& targetHi() const { return q_hi_; }
     /// The RLBase state this runner serves (set by initialize()).
     const std::string& stateName() const { return state_name_; }
     const OperatorEnvelope& operatorEnvelope() const { return envelope_; }
@@ -268,6 +269,8 @@ private:
     std::unique_ptr<isaaclab::ManagerBasedRLEnv> env_;
     RobotArticulation* robot_ = nullptr;   ///< env_->robot, as built by buildEnv()
     JointArray kp_{}, kd_{};   ///< robot order, from the env's gains
+    bool relative_ = false;
+    JointArray q_lo_{}, q_hi_{};
     OperatorEnvelope envelope_;
 
     std::thread thread_;

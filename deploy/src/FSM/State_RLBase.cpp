@@ -43,26 +43,23 @@ State_RLBase::State_RLBase(int state, std::string state_string, ControlContext* 
     const auto num = [](const YAML::Node& n, const char* k, double& dst) {
         if (n && n[k]) dst = n[k].as<double>();
     };
-    num(cfg_["entry"], "max_gyro", lim_.entry_gyro);
-    num(cfg_["entry"], "max_joint_speed", lim_.entry_dq);
+    num(cfg_["still"], "max_gyro", lim_.still_gyro);
+    num(cfg_["still"], "max_joint_speed", lim_.still_dq);
     num(cfg_["guard"], "max_excursion", lim_.guard_excursion);
     num(cfg_["guard"], "max_joint_speed", lim_.guard_dq);
-    if (const YAML::Node e = cfg_["episode"])
+    num(cfg_["episode"], "timeout_s", lim_.timeout_s);
+    num(cfg_["episode"], "upright_gravity_z", lim_.upright_gz);
+    num(cfg_["episode"], "hold_s", lim_.hold_s);
+    if (cfg_["episode"] && cfg_["episode"]["on_success"])
     {
-        num(e, "timeout_s", lim_.timeout_s);
-        num(e, "upright_gravity_z", lim_.upright_gz);
-        num(e, "settle_gyro", lim_.settle_gyro);
-        num(e, "settle_joint_speed", lim_.settle_dq);
-        num(e, "hold_s", lim_.hold_s);
-        if (e["on_success"])
-        {
-            const std::string to = e["on_success"].as<std::string>();
-            if (!FSMStateRegistry::instance().hasName(to))
-                throw std::runtime_error("State_RLBase: FSM." + state_string +
-                                         ".episode.on_success names unknown state " + to);
-            lim_.on_success = FSMStateRegistry::instance().id(to);
-        }
+        const std::string to = cfg_["episode"]["on_success"].as<std::string>();
+        if (!FSMStateRegistry::instance().hasName(to))
+            throw std::runtime_error("State_RLBase: FSM." + state_string +
+                                     ".episode.on_success names unknown state " + to);
+        lim_.on_success = FSMStateRegistry::instance().id(to);
     }
+    supervised_ = std::isfinite(lim_.guard_excursion) || std::isfinite(lim_.guard_dq) ||
+                  std::isfinite(lim_.timeout_s) || lim_.on_success != 0;
 
     // Highest-priority guard: leave immediately once RL has bailed. Inserted
     // at the front so it wins over the transitions declared in fsm.yaml.
@@ -77,42 +74,74 @@ State_RLBase::State_RLBase(int state, std::string state_string, ControlContext* 
 
 namespace
 {
-double maxAbs(const JointArray& a)
+template <class A>
+double maxAbs(const A& a)
 {
     double m = 0.0;
     for (double v : a) m = std::max(m, std::abs(v));
     return m;
 }
-double maxAbs3(const std::array<double, 3>& a)
-{
-    return std::max({std::abs(a[0]), std::abs(a[1]), std::abs(a[2])});
-}
 } // namespace
+
+bool State_RLBase::still_(const RobotState& s) const
+{
+    return maxAbs(s.angular_velocity) < lim_.still_gyro && maxAbs(s.robot_dq) < lim_.still_dq;
+}
 
 std::string State_RLBase::entryRefusal() const
 {
     const RobotState& s = *ctx_->state;
-    char buf[160];
-    if (maxAbs3(s.angular_velocity) > lim_.entry_gyro)
+    if (still_(s)) return {};
+    char buf[128];
+    std::snprintf(buf, sizeof(buf), "robot not still: |gyro| %.2f, |dq| %.2f (still: %.2f / %.2f)",
+                  maxAbs(s.angular_velocity), maxAbs(s.robot_dq), lim_.still_gyro, lim_.still_dq);
+    return buf;
+}
+
+void State_RLBase::supervise_()
+{
+    const RobotState& s = *ctx_->state;
+    const JointArray& lo = policy_->targetLo();
+    const JointArray& hi = policy_->targetHi();
+    for (std::size_t i = 0; i < NUM_DOF && !bail_; ++i)
     {
-        std::snprintf(buf, sizeof(buf), "robot not still: |gyro| %.2f > %.2f rad/s (entry.max_gyro)",
-                      maxAbs3(s.angular_velocity), lim_.entry_gyro);
-        return buf;
+        const double out = std::max(lo[i] - s.robot_q[i], s.robot_q[i] - hi[i]);
+        if (out > lim_.guard_excursion || std::abs(s.robot_dq[i]) > lim_.guard_dq)
+        {
+            bail_ = true;
+            ROS_ERROR("State_RLBase: joint %zu at %.3f rad, %.2f rad/s: %.3f rad outside the "
+                      "target clip [%.3f, %.3f] (guard: %.2f rad, %.2f rad/s). Returning to Passive.",
+                      i, s.robot_q[i], s.robot_dq[i], out, lo[i], hi[i], lim_.guard_excursion,
+                      lim_.guard_dq);
+        }
     }
-    if (maxAbs(s.robot_dq) > lim_.entry_dq)
+
+    std::array<double, 3> g{};
+    const bool settled = s.imu_valid && projected_gravity_xyzw(s.orientation, g) &&
+                         g[2] < lim_.upright_gz && still_(s);
+    if (!settled) settled_since_ = {};
+    else if (settled_since_ == TimePoint{}) settled_since_ = Clock::now();
+    if (settled && lim_.on_success != 0 && !success_ && age_seconds(settled_since_) >= lim_.hold_s)
     {
-        std::snprintf(buf, sizeof(buf), "robot not still: |dq| %.2f > %.2f rad/s (entry.max_joint_speed)",
-                      maxAbs(s.robot_dq), lim_.entry_dq);
-        return buf;
+        success_ = true;
+        ROS_INFO("State_RLBase: upright and still for %.2f s (%.2f s after entry) -> %s.",
+                 lim_.hold_s, age_seconds(entered_at_),
+                 FSMStateRegistry::instance().name(lim_.on_success).c_str());
     }
-    return {};
+    // A robot already upright and still is in its hold, not late: let hold_s finish.
+    if (!success_ && !bail_ && !settled && age_seconds(entered_at_) > lim_.timeout_s)
+    {
+        bail_ = true;
+        ROS_ERROR("State_RLBase: not upright and still %.1f s after entry (episode.timeout_s). "
+                  "Returning to Passive.", lim_.timeout_s);
+    }
 }
 
 void State_RLBase::enter()
 {
     bail_ = false;
     success_ = false;
-    settled_ = false;
+    settled_since_ = {};
     got_first_target_ = false;
     entered_at_ = Clock::now();
 
@@ -165,6 +194,7 @@ void State_RLBase::enter()
 void State_RLBase::run()
 {
     RobotCommand& cmd = *ctx_->command;
+    if (supervised_ && !bail_) supervise_();
 
     if (bail_)
     {
@@ -222,65 +252,6 @@ void State_RLBase::run()
         return;
     }
 
-    // Measured-joint guard and episode end (fsm.yaml guard: / episode:).
-    {
-        const RobotState& s = *ctx_->state;
-        for (std::size_t i = 0; i < NUM_DOF && !bail_; ++i)
-        {
-            const double out = std::max(t.q_lo[i] - s.robot_q[i], s.robot_q[i] - t.q_hi[i]);
-            if (t.relative && out > lim_.guard_excursion)
-            {
-                bail_ = true;
-                ROS_ERROR("State_RLBase: joint %zu at %.3f rad is %.3f rad outside the target clip "
-                          "[%.3f, %.3f] (guard.max_excursion %.2f). Returning to Passive.",
-                          i, s.robot_q[i], out, t.q_lo[i], t.q_hi[i], lim_.guard_excursion);
-            }
-            else if (std::abs(s.robot_dq[i]) > lim_.guard_dq)
-            {
-                bail_ = true;
-                ROS_ERROR("State_RLBase: joint %zu speed %.2f rad/s over guard.max_joint_speed %.2f. "
-                          "Returning to Passive.", i, s.robot_dq[i], lim_.guard_dq);
-            }
-        }
-        if (bail_)
-        {
-            holdDamping(cmd, bail_kd_);
-            stampValid(cmd);
-            return;
-        }
-
-        std::array<double, 3> g{};
-        const bool upright = s.imu_valid && projected_gravity_xyzw(s.orientation, g) &&
-                             g[2] < lim_.upright_gz;
-        const bool still = maxAbs3(s.angular_velocity) < lim_.settle_gyro &&
-                           maxAbs(s.robot_dq) < lim_.settle_dq;
-        if (upright && still)
-        {
-            if (!settled_) settled_since_ = Clock::now();
-            settled_ = true;
-            if (lim_.on_success != 0 && !success_ && age_seconds(settled_since_) >= lim_.hold_s)
-            {
-                success_ = true;
-                ROS_INFO("State_RLBase: upright and still for %.2f s (%.2f s after entry) -> %s.",
-                         lim_.hold_s, age_seconds(entered_at_),
-                         FSMStateRegistry::instance().name(lim_.on_success).c_str());
-            }
-        }
-        else
-        {
-            settled_ = false;
-        }
-        if (!success_ && age_seconds(entered_at_) > lim_.timeout_s)
-        {
-            bail_ = true;
-            ROS_ERROR("State_RLBase: not upright and still %.1f s after entry (episode.timeout_s). "
-                      "Returning to Passive.", lim_.timeout_s);
-            holdDamping(cmd, bail_kd_);
-            stampValid(cmd);
-            return;
-        }
-    }
-
     if (!got_first_target_)
     {
         got_first_target_ = true;
@@ -293,12 +264,11 @@ void State_RLBase::run()
     // FSM thread, and then goes through FSMState::post_run(), i.e. through
     // Safety::clampCommand + checkCommand and JointMapper, like every
     // other state's command. RL has no separate path to the hardware.
-    // A relative action (target = clip(q + delta)) is re-based on the measured q
-    // every tick, as the trainer's controller does; otherwise the held target.
-    // The clip stands in for the training joint limits, which the robot lacks.
-    if (t.relative)
+    // A relative action is re-based on the measured q every tick (see joint_actions.h).
+    if (policy->relative())
         for (std::size_t i = 0; i < NUM_DOF; ++i)
-            cmd.q[i] = std::clamp(ctx_->state->robot_q[i] + t.delta[i], t.q_lo[i], t.q_hi[i]);
+            cmd.q[i] = std::clamp(ctx_->state->robot_q[i] + t.delta[i], policy->targetLo()[i],
+                                  policy->targetHi()[i]);
     else
         cmd.q = t.cmd.q;
     cmd.dq     = t.cmd.dq;

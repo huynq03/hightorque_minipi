@@ -104,6 +104,17 @@ bool Safety::loadFromYaml(const std::string& path)
                      "or malformed -- DISABLING it.");
         cfg_.enable_torque_limit = false;
     }
+    if (const YAML::Node v = n["torque_speed_limit"])
+    {
+        const auto fz = v.as<std::vector<double>>();
+        if (fz.size() != 2 || !(0.0 <= fz[0] && fz[0] < fz[1]))
+        {
+            ROS_ERROR("Safety: torque_speed_limit must be [full, zero] with 0 <= full < zero");
+            return false;
+        }
+        cfg_.tau_speed_full = fz[0];
+        cfg_.tau_speed_zero = fz[1];
+    }
 
     if (cfg_.enable_position_limit)
     {
@@ -152,7 +163,8 @@ bool Safety::loadFromYaml(const std::string& path)
     return true;
 }
 
-SafetyReport Safety::checkState(const RobotState& state, HardwareStatus hw) const
+SafetyReport Safety::checkState(const RobotState& state, HardwareStatus hw,
+                                bool tolerate_tilt) const
 {
     SafetyReport r;
 
@@ -258,8 +270,7 @@ SafetyReport Safety::checkState(const RobotState& state, HardwareStatus hw) cons
         }
     }
 
-    if (cfg_.enable_orientation && state.imu_valid &&
-        !tilt_tolerated_.load(std::memory_order_relaxed))
+    if (cfg_.enable_orientation && state.imu_valid && !tolerate_tilt)
     {
         const double tilt = std::max(std::abs(state.rpy[0]), std::abs(state.rpy[1]));
         if (tilt > cfg_.max_tilt_rad)
@@ -341,7 +352,7 @@ SafetyReport Safety::checkCommand(const RobotCommand& cmd) const
     return r;
 }
 
-int Safety::clampCommand(RobotCommand& cmd, std::uint64_t* mask) const
+int Safety::clampCommand(RobotCommand& cmd, const RobotState& state, std::uint64_t* mask) const
 {
     int n = 0;
     std::uint64_t m = 0;
@@ -356,7 +367,29 @@ int Safety::clampCommand(RobotCommand& cmd, std::uint64_t* mask) const
     };
     if (cfg_.enable_position_limit) clampAll(cmd.q, cfg_.q_lower, cfg_.q_upper, false, 0);
     if (cfg_.enable_velocity_limit) clampAll(cmd.dq, cfg_.dq_max, cfg_.dq_max, true, NUM_DOF);
-    if (cfg_.enable_torque_limit)   clampAll(cmd.torque, cfg_.tau_max, cfg_.tau_max, true, 2 * NUM_DOF);
+    if (cfg_.enable_torque_limit)
+    {
+        clampAll(cmd.torque, cfg_.tau_max, cfg_.tau_max, true, 2 * NUM_DOF);
+        // The motor computes kp (q - q_meas) + kd (dq - dq_meas) + torque
+        // itself, so the bound is enforced through q (applied after the
+        // position clamp: the motor wins over the target envelope).
+        const double span = cfg_.tau_speed_zero - cfg_.tau_speed_full;
+        for (std::size_t j = 0; j < NUM_DOF; ++j)
+        {
+            const double v = state.robot_dq[j];
+            double hi = cfg_.tau_max[j], lo = -hi;
+            if (span > 0.0)
+            {
+                const double s = std::clamp((cfg_.tau_speed_zero - std::abs(v)) / span, 0.0, 1.0);
+                (v > 0.0 ? hi : lo) *= s;
+            }
+            if (!(cmd.kp[j] > 0.0) || !std::isfinite(v)) continue;
+            const double rest = cmd.kd[j] * (cmd.dq[j] - v) + cmd.torque[j];
+            const double c = std::clamp(cmd.q[j], state.robot_q[j] + (lo - rest) / cmd.kp[j],
+                                        state.robot_q[j] + (hi - rest) / cmd.kp[j]);
+            if (c != cmd.q[j]) { cmd.q[j] = c; ++n; m |= std::uint64_t{1} << (2 * NUM_DOF + j); }
+        }
+    }
     if (mask) *mask = m;
     return n;
 }
@@ -498,7 +531,7 @@ bool Safety::publish(RobotCommand& cmd, ControlContext& ctx)
     }
 
     std::uint64_t clamp_mask = 0;
-    if (clampCommand(cmd, &clamp_mask) > 0) clamped_commands_.fetch_add(1, std::memory_order_relaxed);
+    if (clampCommand(cmd, *ctx.state, &clamp_mask) > 0) clamped_commands_.fetch_add(1, std::memory_order_relaxed);
     last_clamp_mask_.store(clamp_mask, std::memory_order_relaxed);
 
     const SafetyReport rep = checkCommand(cmd);

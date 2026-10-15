@@ -122,12 +122,12 @@ void CtrlFSM::run_()
 void CtrlFSM::refreshState_()
 {
     ctx_->readState();
-    if (currentState_) ctx_->safety->setTiltTolerated(currentState_->tolerateTilt());
 
     // Detection, then Safety::raise() latches it. Safety ignores everything
     // until main() arms it, which is what keeps "no motor packet yet" during
     // startup from being recorded as a runtime fault.
-    ctx_->safety->raise(ctx_->safety->checkState(*ctx_->state, ctx_->hardware->status()));
+    ctx_->safety->raise(ctx_->safety->checkState(*ctx_->state, ctx_->hardware->status(),
+                                                 currentState_ && currentState_->tolerateTilt()));
 }
 
 void CtrlFSM::serviceFaultReset_()
@@ -168,54 +168,42 @@ void CtrlFSM::tick_()
 
     if (next_id != 0 && !currentState_->isState(next_id))
     {
+        std::shared_ptr<BaseState> next;
+        for (const auto& st : states)
+            if (st->isState(next_id)) next = st;
+
         // Guard: never hand control to an RL state whose policy is not ready.
         // State_RLBase would refuse and bounce straight back, so rejecting the
         // transition here keeps the FSM deterministic and avoids a one-cycle
         // excursion into a state that cannot command anything.
         if (rl_state_ids_.count(next_id))
         {
-            RLPolicyRunner* policy = ctx_->policyFor(FSMStateRegistry::instance().name(next_id));
+            RLPolicyRunner* policy = ctx_->policyFor(next->getStateString());
             std::string refusal;
-            if (!policy)                       refusal = "no policy runner";
-            else if (!policy->ready())         refusal = policy->unavailableReason();
+            if (!policy->ready())              refusal = policy->unavailableReason();
             else if (ctx_->safety->faulted())  refusal = "a safety fault is latched";
             else if (!currentState_->readyForRL())
                                                refusal = currentState_->notReadyForRLReason();
             else                               refusal = policy->entryBlocker(*ctx_->state);
+            if (refusal.empty())               refusal = next->entryRefusal();
 
             if (!refusal.empty())
             {
                 ROS_ERROR_THROTTLE(2.0,
                     "FSM: refusing transition %s -> %s: %s. Staying in %s.",
                     currentState_->getStateString().c_str(),
-                    FSMStateRegistry::instance().name(next_id).c_str(),
+                    next->getStateString().c_str(),
                     refusal.c_str(),
                     currentState_->getStateString().c_str());
                 return;
             }
         }
 
-        for (const auto& state : states)
-        {
-            if (state->isState(next_id))
-            {
-                if (const std::string why = state->entryRefusal(); !why.empty())
-                {
-                    ROS_ERROR_THROTTLE(2.0, "FSM: refusing transition %s -> %s: %s. Staying in %s.",
-                                       currentState_->getStateString().c_str(),
-                                       state->getStateString().c_str(), why.c_str(),
-                                       currentState_->getStateString().c_str());
-                    return;
-                }
-                ROS_INFO("FSM: Change state from %s to %s",
-                         currentState_->getStateString().c_str(),
-                         state->getStateString().c_str());
-                currentState_->exit();
-                currentState_ = state;
-                currentState_->enter();
-                break;
-            }
-        }
+        ROS_INFO("FSM: Change state from %s to %s",
+                 currentState_->getStateString().c_str(), next->getStateString().c_str());
+        currentState_->exit();
+        currentState_ = next;
+        currentState_->enter();
     }
 }
 

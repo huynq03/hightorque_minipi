@@ -55,7 +55,6 @@ int main(int argc, char** argv)
     opt.backend_is_simulation = true;
     opt.version_override = version;
     opt.state = state;
-    if (!state.empty() && !version.empty()) opt.fsm[state]["policy_version"] = version;
 
     RLPolicyRunner runner;
     runner.initialize(cfg + "/policy.yaml", opt);

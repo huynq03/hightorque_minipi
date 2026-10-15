@@ -116,29 +116,14 @@ FSM:
       # Once up, FixStand blends to the nominal pose; then `rl` for walking.
       FixStand: stand
     policy_dir: config/policy/recovery
-    policy_version: getup_2600
+    policy_version: getup_2600_s04
     # The policy starts lying down: the tilt check would fault at once.
     tolerate_tilt: true
-    # Training started each episode from a robot lying still (0.6 s settle).
-    entry:
-      max_gyro: 0.3          # rad/s
-      max_joint_speed: 0.5   # rad/s
-    # The action is relative (target = clip(q + 0.25 a)): nothing but the clip
-    # holds a joint. Bail to Passive if a MEASURED joint still leaves the clip
-    # (sim worst case 0.27 rad) or spins (sim max 6.4 rad/s).
-    guard:
-      max_excursion: 0.5     # rad beyond the package's target clip
-      max_joint_speed: 15.0  # rad/s
-    # Done = upright and still for hold_s -> FixStand (absolute PD) takes over.
-    # Sim: up in ~1.5 s. Not done within timeout_s -> Passive.
-    episode:
-      timeout_s: 5.0
-      upright_gravity_z: -0.95
-      settle_gyro: 0.3
-      settle_joint_speed: 0.5
-      hold_s: 0.5
-      on_success: FixStand
+    # Optional State_RLBase supervision (State_RLBase.h). Training starts each
+    # episode lying still; the clip (deploy.yaml) holds the joints, the guard
+    # catches what it cannot (sim worst case 0.27 rad, 6.4 rad/s); success hands
+    # over to FixStand (sim: up after ~1.5 s).
+    still: {max_gyro: 0.3, max_joint_speed: 0.5}       # rad/s; to enter and to succeed
+    guard: {max_excursion: 0.5, max_joint_speed: 15.0}  # rad beyond the clip; rad/s
+    episode: {timeout_s: 6.0, upright_gravity_z: -0.95, hold_s: 1.5, on_success: FixStand}
     action_timeout_s: 0.1
-    first_output_timeout_s: 0.5
-    bail_kd: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0,
-              1.0, 1.0, 1.0, 1.0, 1.0, 1.0]

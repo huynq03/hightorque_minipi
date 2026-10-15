@@ -6,13 +6,13 @@
 #    fault_response.kd 1.0      == HtdwMotor::protectMotor()
 #    finite checks, command timeout, motor/IMU timeouts: implemented + tested
 #    q_lower / q_upper           measured mechanical stops (hand sweep 2026-10-13)
+#    tau_max 15 N*m + torque_speed_limit [5, 6] rad/s: operator limits (2026-10-14),
+#                                1 N*m under the 16 N*m motor limit
 #  PLACEHOLDER -- REQUIRES HARDWARE MEASUREMENT (do not trust for RL actuation)
 #    motor_timeout_s 0.1         SDK's own 0.1 s; real jitter not measured
 #    imu_timeout_s 0.2           yesense publish rate not measured
 #  DISABLED -- no verified value exists anywhere
 #    velocity limit (dq_max)     no Mini-Pi spec
-#    torque limit (tau_max)      training clamp was 17.85 N*m, vendor lists 35,
-#                                URDF effort 21; the MOTOR's limit is unknown
 #  POLICY-SIDE q_target clamp (not here): policy package clip_output = the
 #  training DOF limits; see config/policy/velocity/isaaclab_pi/params/deploy.yaml.
 # ============================================================================
@@ -57,9 +57,9 @@ enable_finite_check: true
 enable_position_limit: true
 enable_command_timeout: true
 enable_orientation: true
-# Disabled: no verified limits exist. See below.
+# Velocity FAULT disabled (no spec); speed is bounded by torque_speed_limit below.
 enable_velocity_limit: false
-enable_torque_limit: false
+enable_torque_limit: true
 
 # --- orientation ------------------------------------------------------------
 # 1.0 rad. SOURCE-VERIFIED as a HighTorque value: `imu_limt_num: 1.0` in
@@ -86,10 +86,18 @@ q_upper: [ 2.88,  2.77,  2.90,  1.45,  1.45,  0.81,
 dq_max: []
 
 # --- torque limit -----------------------------------------------------------
-# UNKNOWN: 12dof_STM32H730_pi_lubancat_params.yaml sets tor_limit_enable:false
-# for all 12 motors, so no torque envelope is defined anywhere in the source.
-# The check is DISABLED rather than given an invented value.
-tau_max: []
+# Operator limit (2026-10-14): the motors saturate at 16 N*m; keep 1 N*m below so
+# they do not sit at the hardware limit. Bounds the torque the motor's PD loop
+# produces, kp (q - q_meas) + kd (dq - dq_meas) + tau_ff, in every state, by
+# moving q (Safety::clampCommand); saturations show in the status "safety clamp"
+# mask (bits 24..35). ROBOT ORDER.
+tau_max: [15, 15, 15, 15, 15, 15,
+          15, 15, 15, 15, 15, 15]
+# [full, zero] rad/s: torque pushing a joint further in its direction of motion
+# is tau_max up to |dq| = full and falls linearly to 0 at |dq| = zero (braking
+# torque is never cut), so the joints stay under ~6 rad/s. The getup policy was
+# trained with [3, 4] (and +-16 / ankle roll +-6 N*m).
+torque_speed_limit: [5.0, 6.0]
 
 # --- runtime fault response -------------------------------------------------
 # What Safety does once a check above has tripped AFTER startup succeeded.

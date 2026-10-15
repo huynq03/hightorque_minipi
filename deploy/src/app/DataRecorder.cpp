@@ -21,35 +21,24 @@ DataRecorder::~DataRecorder() { stop(); }
 
 bool DataRecorder::start(ros::NodeHandle& nh, std::string& error)
 {
-    if (!(cfg_.hz > 0.0))
+    std::error_code ec;
+    std::filesystem::create_directories(std::filesystem::path(cfg_.csv_path).parent_path(), ec);
+    csv_.open(cfg_.csv_path);
+    if (!csv_ || !(cfg_.hz > 0.0))
     {
-        error = "record_hz must be > 0";
+        error = !csv_ ? "cannot create " + cfg_.csv_path : std::string("record_hz must be > 0");
         return false;
     }
-    if (!cfg_.csv_path.empty())
-    {
-        std::error_code ec;
-        std::filesystem::create_directories(std::filesystem::path(cfg_.csv_path).parent_path(), ec);
-        csv_.open(cfg_.csv_path);
-        if (!csv_)
-        {
-            error = "cannot create " + cfg_.csv_path;
-            return false;
-        }
-        writeHeader_();
-    }
+    writeHeader_();
     if (cfg_.publish)
     {
-        pub_state_ = nh.advertise<sensor_msgs::JointState>(cfg_.topic_ns + "/joint_states", 10);
-        pub_cmd_ = nh.advertise<sensor_msgs::JointState>(cfg_.topic_ns + "/joint_command", 10);
+        pub_state_ = nh.advertise<sensor_msgs::JointState>("mini_pi/joint_states", 10);
+        pub_cmd_ = nh.advertise<sensor_msgs::JointState>("mini_pi/joint_command", 10);
     }
     running_ = true;
     thread_ = std::thread(&DataRecorder::loop_, this);
-    ROS_INFO("DataRecorder: %.0f Hz -> %s%s", cfg_.hz,
-             cfg_.csv_path.empty() ? "(no file)" : cfg_.csv_path.c_str(),
-             cfg_.publish ? (", topics /" + cfg_.topic_ns + "/joint_states, /" + cfg_.topic_ns +
-                             "/joint_command").c_str()
-                          : "");
+    ROS_INFO("DataRecorder: %.0f Hz -> %s%s", cfg_.hz, cfg_.csv_path.c_str(),
+             cfg_.publish ? ", topics mini_pi/joint_states, mini_pi/joint_command" : "");
     return true;
 }
 
@@ -73,10 +62,8 @@ void DataRecorder::writeHeader_()
 
 void DataRecorder::loop_()
 {
-    const auto period = std::chrono::duration_cast<Clock::duration>(
-        std::chrono::duration<double>(1.0 / cfg_.hz));
+    ros::WallRate rate(cfg_.hz);
     const auto t0 = Clock::now();
-    auto next = t0 + period;
     auto last_flush = t0;
     std::uint64_t last_tick = 0;
     // RobotState::robot_tau keeps the MOTOR's sign (JointMapper reproduces the
@@ -111,7 +98,6 @@ void DataRecorder::loop_()
             const double t = std::chrono::duration<double>(Clock::now() - t0).count();
             for (std::size_t i = 0; i < NUM_DOF; ++i) tau[i] = tau_sign[i] * s.robot_tau[i];
 
-            if (csv_.is_open())
             {
                 csv_ << std::fixed << std::setprecision(4) << t << "," << std::setprecision(3)
                      << ros::WallTime::now().toSec() << "," << state << "," << faulted << ","
@@ -147,9 +133,7 @@ void DataRecorder::loop_()
                 pub_cmd_.publish(jc);
             }
         }
-        std::this_thread::sleep_until(next);
-        next += period;
-        if (Clock::now() > next) next = Clock::now() + period;   // re-anchor, never burst
+        rate.sleep();
     }
 }
 

@@ -9,8 +9,8 @@
 //     state, and the running policy's step (seq, raw action, relative delta);
 //   * optionally two sensor_msgs/JointState topics for live plotting
 //     (rqt_plot, PlotJuggler) or rosbag:
-//       <ns>/joint_states   position = q, velocity = dq, effort = measured tau
-//       <ns>/joint_command  position = q_target, velocity = 0,
+//       mini_pi/joint_states   position = q, velocity = dq, effort = measured tau
+//       mini_pi/joint_command  position = q_target, velocity = 0,
 //                           effort = kp (q_target - q) - kd dq  (PD torque asked of the motor)
 //
 // While a safety fault is latched the bus carries Safety's damping override, not
@@ -37,9 +37,8 @@ public:
     struct Config
     {
         double hz = 200.0;
-        std::string csv_path;        ///< empty = no file
+        std::string csv_path;
         bool publish = true;         ///< JointState topics
-        std::string topic_ns = "mini_pi";
     };
 
     DataRecorder(const Config& cfg, const ControlContext& ctx, const CtrlFSM& fsm,

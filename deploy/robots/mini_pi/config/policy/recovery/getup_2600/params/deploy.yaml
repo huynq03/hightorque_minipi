@@ -53,16 +53,10 @@ observations:
     last_action:       {clip: [-100.0, 100.0], history_length: 6}   # raw tanh output
     constant:          {params: {value: [0.25]}, clip: [-100.0, 100.0], history_length: 6}  # action scale
 
-# q_target = clip(q_measured + 0.25 * a), re-based on the measured q every FSM
-# tick. The clip is the training XML's joint ranges (pi_extend_joint_limit.xml):
-# the policy leans on those limits (both thighs held at +-0.3), which MuJoCo
-# enforced in training but the robot does not -- unclipped, the real hip yaws
-# spun to +-2.9 rad (2026-10-13). Where a training limit lies beyond the robot's
-# measured stop (calf 1.65 vs ~1.44), safety.yaml q_lower/q_upper clamps the
-# target to the stop. Do NOT shrink this clip below the training limits: the
-# policy pushes the knees to their limit to rise from prone (sim with the
-# measured stops: 8/8 prone get-ups with this clip, 2/8 with calf <= 1.40).
-# Policy order.
+# q_target = clip(q + 0.25 a), re-based every FSM tick (joint_actions.h). clip =
+# the training XML's joint limits, which the policy leans on and the robot lacks;
+# safety.yaml q_lower/q_upper cut it at the real stops. Keep it at the training
+# limits: a tighter calf clip broke prone get-ups in sim (2/8 vs 8/8). Policy order.
 actions:
   RelativeJointPositionAction:
     scale: 0.25

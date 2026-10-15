@@ -13,11 +13,10 @@
 //   target = clip(clamp(raw, raw_clip) * scale + offset)
 //
 // RelativeJointPositionAction: processed = clamp(raw, raw_clip) * scale is a
-// delta; the robot commands clip(q_measured + delta), re-based on every control
-// tick (mjlab RelativeJointPositionAction). `clip` bounds that ABSOLUTE target:
-// set it to the training joint limits, which held the joints in simulation --
-// without it a policy that leans on a limit drives the joint on and on.
-// `offset` is rejected.
+// delta; the robot commands clip(q_measured + delta), re-based every control tick
+// (mjlab RelativeJointPositionAction). `clip` bounds that absolute target and
+// stands in for the training joint limits; `offset` is rejected.
+
 #pragma once
 
 #include "isaaclab/envs/manager_based_rl_env.h"
@@ -73,7 +72,7 @@ public:
                                         : std::clamp(actions[i], raw_clip_[0], raw_clip_[1]);
             float a = raw_[i] * scale_[i];
             a += offset_[i];
-            if (!clip_.empty()) a = std::clamp(a, clip_[i][0], clip_[i][1]);
+            if (!clip_.empty() && !relative()) a = std::clamp(a, clip_[i][0], clip_[i][1]);
             processed_[i] = a;
         }
     }
@@ -143,16 +142,6 @@ public:
 
     bool relative() const override { return true; }
 
-    /// The delta only; `clip` applies to q + delta where q is measured.
-    void process_actions(const std::vector<float>& actions) override
-    {
-        for (std::size_t i = 0; i < n(); ++i)
-        {
-            raw_[i] = raw_clip_.empty() ? actions[i]
-                                        : std::clamp(actions[i], raw_clip_[0], raw_clip_[1]);
-            processed_[i] = raw_[i] * scale_[i];
-        }
-    }
 };
 
 REGISTER_ACTION(RelativeJointPositionAction)

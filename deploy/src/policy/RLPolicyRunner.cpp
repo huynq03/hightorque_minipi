@@ -230,14 +230,14 @@ bool RLPolicyRunner::initialize(const std::string& policy_yaml, const Options& o
     std::string version;
     if (st && st["policy_version"]) version = st["policy_version"].as<std::string>();
     else if (is_primary && p && p["version"]) version = p["version"].as<std::string>();
-    if (is_primary && !opt.version_override.empty()) version = opt.version_override;
+    if (!opt.version_override.empty()) version = opt.version_override;
     const bool allow_test = opt.allow_test_policy_override ||
                             (p && p["allow_test_policy"] && p["allow_test_policy"].as<bool>());
 
     std::string policy_dir;
     if (is_primary && p && p["policy_dir"]) policy_dir = p["policy_dir"].as<std::string>();
     if (st && st["policy_dir"]) policy_dir = st["policy_dir"].as<std::string>();
-    if (is_primary && !opt.policy_dir_override.empty()) policy_dir = opt.policy_dir_override;
+    if (!opt.policy_dir_override.empty()) policy_dir = opt.policy_dir_override;
     if (policy_dir.empty()) return refuse("no policy_dir: set FSM." + state_name + ".policy_dir in fsm.yaml");
 
     package_ = resolvePolicyPackage(policy_dir, opt.base_dir, version);
@@ -288,6 +288,16 @@ void RLPolicyRunner::adopt_(std::unique_ptr<isaaclab::ManagerBasedRLEnv> env)
     {
         kp_[static_cast<std::size_t>(d.joint_ids_map[i])] = d.joint_stiffness[i];
         kd_[static_cast<std::size_t>(d.joint_ids_map[i])] = d.joint_damping[i];
+    }
+    relative_ = env_->action_manager->relative();
+    q_lo_.fill(-std::numeric_limits<double>::infinity());
+    q_hi_.fill(std::numeric_limits<double>::infinity());
+    if (const auto& clip = env_->action_manager->target_clip(); !clip.empty())
+    {
+        std::vector<float> lo, hi;
+        for (const auto& c : clip) { lo.push_back(c[0]); hi.push_back(c[1]); }
+        robot_->to_robot(lo, q_lo_);
+        robot_->to_robot(hi, q_hi_);
     }
     status_ = PolicyStatus::Ready;
     reason_.clear();
@@ -395,32 +405,11 @@ void RLPolicyRunner::threadBody_()
         }
 
         const auto& processed = env_->action_manager->processed_actions();
-        out.relative = env_->action_manager->relative();
-        if (out.relative)
-        {
-            // A joint delta: robot order, no calibration shift. cmd.q is the
-            // target at sample time; State_RLBase re-bases it every tick.
-            const auto& m = robot_->data.joint_ids_map;
-            const auto& shift = robot_->data.joint_pos_shift;
-            const auto clip = env_->action_manager->target_clip();
-            out.delta.fill(0.0);
-            out.q_lo.fill(-std::numeric_limits<double>::infinity());
-            out.q_hi.fill(std::numeric_limits<double>::infinity());
-            for (std::size_t i = 0; i < m.size(); ++i)
-            {
-                const auto r = static_cast<std::size_t>(m[i]);
-                out.delta[r] = processed[i];
-                out.q_lo[r] = static_cast<double>(clip[i][0]) - shift[i];
-                out.q_hi[r] = static_cast<double>(clip[i][1]) - shift[i];
-            }
-            for (std::size_t i = 0; i < out.cmd.q.size(); ++i)
-                out.cmd.q[i] = std::clamp(robot_->state.robot_q[i] + out.delta[i],
-                                          out.q_lo[i], out.q_hi[i]);
-        }
+        if (relative_)
+            for (std::size_t i = 0; i < processed.size(); ++i)   // a delta: no calibration shift
+                out.delta[static_cast<std::size_t>(robot_->data.joint_ids_map[i])] = processed[i];
         else
-        {
             robot_->to_robot(processed, out.cmd.q);
-        }
         out.cmd.kp = kp_;
         out.cmd.kd = kd_;
         out.cmd.dq.fill(0.0);
